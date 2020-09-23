@@ -154,9 +154,9 @@ fn ConfigSet(comptime Grammar: type) type {
     };
 }
 
-fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, start_symbol: Grammar.NonTerminal) !void {
+fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, start_symbol: Grammar.NonTerminal) ![]ConfigSet(Grammar) {
     var family = std.ArrayList(ConfigSet(Grammar)).init(allocator);
-    defer family.deinit();
+    errdefer family.deinit();
 
     var seen = std.HashMap(
         ConfigSet(Grammar),
@@ -194,19 +194,27 @@ fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, st
             try new_config_set.closure(allocator, grammar);
 
             const result = try seen.getOrPut(new_config_set);
-            if (!result.found_existing) {
+            if (result.found_existing) {
+                new_config_set.deinit(allocator);
+            } else {
                 result.entry.value = family.items.len;
                 try family.append(new_config_set);
             }
         }
     }
 
-    for (family.items) |config_set| {
-        config_set.dump();
-        std.debug.print("----\n", .{});
-    }
+    return family.toOwnedSlice();
 }
 
 pub fn generate(allocator: *Allocator, grammar: anytype, start_symbol: @TypeOf(grammar).NonTerminal) !void {
-    try lr0Family(@TypeOf(grammar), allocator, grammar, start_symbol);
+    const family = try lr0Family(@TypeOf(grammar), allocator, grammar, start_symbol);
+    defer {
+        for (family) |*config_set| config_set.deinit(allocator);
+        allocator.free(family);
+    }
+
+    for (family) |config_set| {
+        config_set.dump();
+        std.debug.print("----\n", .{});
+    }
 }

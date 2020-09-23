@@ -27,8 +27,5 @@ test "main" {
         .{.lhs = .T, .elements = &[_]G.Symbol{ G.t(.lparen), G.nt(.E), G.t(.rparen) }},
     });
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    try lr0.generate(&arena.allocator, g, .S);
+    try lr0.generate(std.testing.allocator, g, .S);
 }
