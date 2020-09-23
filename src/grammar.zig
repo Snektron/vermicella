@@ -14,6 +14,17 @@ pub fn Grammar(comptime T: type, comptime NT: type) type {
         pub const Production = struct {
             lhs: NonTerminal,
             elements: []Symbol,
+
+            pub fn format(self: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+                try writer.print("{} -> ", .{ self.lhs });
+
+                for (self.elements) |element, i| {
+                    switch (element) {
+                        .terminal => |sym| try writer.print("{} ", .{ sym }),
+                        .non_terminal => |sym| try writer.print("{} ", .{ sym }),
+                    }
+                }
+            }
         };
 
         productions: []Production,

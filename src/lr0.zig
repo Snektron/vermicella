@@ -38,6 +38,23 @@ fn Config(comptime Grammar: type) type {
                 .non_terminal => |nt| nt,
             };
         }
+
+        pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+            try writer.print("{} -> ", .{ self.prod.lhs });
+
+            for (self.prod.elements) |element, i| {
+                if (i == self.dot) {
+                    try writer.print("• ", .{});
+                }
+                switch (element) {
+                    .terminal => |t| try writer.print("{} ", .{ t }),
+                    .non_terminal => |nt| try writer.print("{} ", .{ nt }),
+                }
+            }
+            if (self.prod.elements.len == self.dot) {
+                try writer.print("• ", .{});
+            }
+        }
     };
 }
 
@@ -47,7 +64,7 @@ fn ConfigSet(comptime Grammar: type) type {
         pub const Successor = union(enum) {
             accept,
             reduce,
-            move_to: usize,
+            shift: usize,
         };
 
         const Set = std.AutoHashMapUnmanaged(Config(Grammar), Successor);
@@ -114,27 +131,16 @@ fn ConfigSet(comptime Grammar: type) type {
             var it = self.configs.iterator();
             while (it.next()) |entry| {
                 const config = entry.key;
-                std.debug.print("{} => ", .{ config.prod.lhs });
+                std.debug.print("{}", .{ entry.key });
 
-                for (config.prod.elements) |element, i| {
-                    if (i == config.dot) {
-                        std.debug.print("• ", .{});
-                    }
-                    switch (element) {
-                        .terminal => |t| std.debug.print("{} ", .{ t }),
-                        .non_terminal => |nt| std.debug.print("{} ", .{ nt }),
-                    }
-                }
-                if (config.prod.elements.len == config.dot) {
-                    std.debug.print("• ", .{});
-                }
                 if (with_successors) {
                     switch (entry.value) {
-                        .accept => std.debug.print(": accept", .{}),
-                        .reduce => std.debug.print(": reduce", .{}),
-                        .move_to => |config_set_index| std.debug.print(": move to {}", .{config_set_index}),
+                        .accept => std.debug.print(" => accept", .{}),
+                        .reduce => std.debug.print(" => reduce", .{}),
+                        .shift => |config_set_index| std.debug.print(" => {}", .{config_set_index}),
                     }
                 }
+
                 std.debug.print("\n", .{});
             }
         }
@@ -180,8 +186,8 @@ fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, st
     ).init(allocator);
     defer seen.deinit();
 
-    var seen_syms = std.AutoHashMap(Grammar.Symbol, void).init(allocator);
-    defer seen_syms.deinit();
+    // var seen_syms = std.AutoHashMap(Grammar.Symbol, void).init(allocator);
+    // defer seen_syms.deinit();
 
     {
         var initial = try ConfigSet(Grammar).initFromProductions(allocator, grammar, start_symbol);
@@ -193,19 +199,26 @@ fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, st
     var i: usize = 0;
     while (i < family.items.len) : (i += 1) {
         const config_set = family.items[i];
+        // seen_syms.clearRetainingCapacity();
 
-        seen_syms.clearRetainingCapacity();
+        var reduced = false;
+        var accepted_or_shifted = false;
 
         var it = config_set.configs.iterator();
         while (it.next()) |entry| {
             const sym = entry.key.symAtDot() orelse {
-                entry.value = if (std.meta.eql(entry.key.prod.lhs, start_symbol))
-                        .accept
-                    else
-                        .reduce;
+                if (std.meta.eql(entry.key.prod.lhs, start_symbol)) {
+                    accepted_or_shifted = true;
+                    entry.value = .accept;
+                } else {
+                    reduced = true;
+                    entry.value = .reduce;
+                }
                 continue;
             };
+            accepted_or_shifted = true;
 
+            // TODO: Fix
             // if ((try seen_syms.getOrPut(sym)).found_existing) {
             //     continue;
             // }
@@ -221,7 +234,11 @@ fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, st
                 try family.append(new_config_set);
             }
 
-            entry.value = .{.move_to = result.entry.value};
+            entry.value = .{.shift = result.entry.value};
+        }
+
+        if (reduced and accepted_or_shifted) {
+            return error.ShiftReduceConflict;
         }
     }
 
@@ -238,5 +255,41 @@ pub fn generate(allocator: *Allocator, grammar: anytype, start_symbol: @TypeOf(g
     for (family) |config_set, i| {
         std.debug.print("---- Configuration set {}:\n", .{ i });
         config_set.dump(true);
+    }
+
+    std.debug.print("=========\n", .{});
+
+   for (family) |config_set, state| {
+        var it = config_set.configs.iterator();
+        while (it.next()) |entry| {
+            if (entry.value == .accept) {
+                std.debug.print("Action[{}, $] = accept\n", .{ state });
+                continue;
+            } else if (entry.value == .reduce) {
+                std.debug.print("Action[{}, *] = reduce {}\n", .{ state, entry.key.prod });
+                continue;
+            }
+
+            const sym = entry.key.symAtDot() orelse {
+                std.debug.print("Action[{}, $] = accept\n", .{ state });
+                continue;
+            };
+
+            switch (sym) {
+                .terminal => |t| std.debug.print("Action[{}, {}] = shift {}\n", .{ state, t, entry.value.shift }),
+                .non_terminal => {},
+            }
+        }
+    }
+
+    for (family) |config_set, state| {
+        var it = config_set.configs.iterator();
+        while (it.next()) |entry| {
+            const sym = entry.key.symAtDot() orelse continue;
+            switch (sym) {
+                .terminal => {},
+                .non_terminal => |nt| std.debug.print("Goto[{}, {}] = {}\n", .{ state, nt, entry.value.shift }),
+            }
+        }
     }
 }
