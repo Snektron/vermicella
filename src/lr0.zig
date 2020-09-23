@@ -44,7 +44,13 @@ fn Config(comptime Grammar: type) type {
 fn ConfigSet(comptime Grammar: type) type {
     return struct {
         const Self = @This();
-        const Set = std.AutoHashMapUnmanaged(Config(Grammar), void);
+        pub const Successor = union(enum) {
+            accept,
+            reduce,
+            move_to: usize,
+        };
+
+        const Set = std.AutoHashMapUnmanaged(Config(Grammar), Successor);
 
         configs: Set = .{},
 
@@ -53,7 +59,7 @@ fn ConfigSet(comptime Grammar: type) type {
 
             for (grammar.productions) |*prod| {
                 if (prod.lhs == initial) {
-                    try self.configs.put(allocator, Config(Grammar).init(prod), {});
+                    try self.configs.put(allocator, Config(Grammar).init(prod), undefined);
                 }
             }
 
@@ -97,14 +103,14 @@ fn ConfigSet(comptime Grammar: type) type {
             while (it.next()) |entry| {
                 const dot_symbol = entry.key.symAtDot() orelse continue;
                 if (std.meta.eql(dot_symbol, symbol)) {
-                    try new_config_set.configs.put(allocator, entry.key.successor() orelse continue, {});
+                    try new_config_set.configs.put(allocator, entry.key.successor() orelse continue, undefined);
                 }
             }
 
             return new_config_set;
         }
 
-        fn dump(self: Self) void {
+        fn dump(self: Self, with_successors: bool) void {
             var it = self.configs.iterator();
             while (it.next()) |entry| {
                 const config = entry.key;
@@ -120,7 +126,14 @@ fn ConfigSet(comptime Grammar: type) type {
                     }
                 }
                 if (config.prod.elements.len == config.dot) {
-                    std.debug.print("•", .{});
+                    std.debug.print("• ", .{});
+                }
+                if (with_successors) {
+                    switch (entry.value) {
+                        .accept => std.debug.print(": accept", .{}),
+                        .reduce => std.debug.print(": reduce", .{}),
+                        .move_to => |config_set_index| std.debug.print(": move to {}", .{config_set_index}),
+                    }
                 }
                 std.debug.print("\n", .{});
             }
@@ -185,10 +198,17 @@ fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, st
 
         var it = config_set.configs.iterator();
         while (it.next()) |entry| {
-            const sym = entry.key.symAtDot() orelse continue;
-            if ((try seen_syms.getOrPut(sym)).found_existing) {
+            const sym = entry.key.symAtDot() orelse {
+                entry.value = if (std.meta.eql(entry.key.prod.lhs, start_symbol))
+                        .accept
+                    else
+                        .reduce;
                 continue;
-            }
+            };
+
+            // if ((try seen_syms.getOrPut(sym)).found_existing) {
+            //     continue;
+            // }
 
             var new_config_set = try config_set.successor(allocator, grammar, sym);
             try new_config_set.closure(allocator, grammar);
@@ -200,6 +220,8 @@ fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, st
                 result.entry.value = family.items.len;
                 try family.append(new_config_set);
             }
+
+            entry.value = .{.move_to = result.entry.value};
         }
     }
 
@@ -213,8 +235,8 @@ pub fn generate(allocator: *Allocator, grammar: anytype, start_symbol: @TypeOf(g
         allocator.free(family);
     }
 
-    for (family) |config_set| {
-        config_set.dump();
-        std.debug.print("----\n", .{});
+    for (family) |config_set, i| {
+        std.debug.print("---- Configuration set {}:\n", .{ i });
+        config_set.dump(true);
     }
 }
