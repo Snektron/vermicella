@@ -20,8 +20,12 @@ fn Config(comptime Grammar: type) type {
             return Self{.prod = self.prod, .dot = self.dot + 1};
         }
 
+        fn isDotAtEnd(self: Self) bool {
+            return self.dot == self.prod.elements.len;
+        }
+
         fn symAtDot(self: Self) ?Grammar.Symbol {
-            return if (self.dot == self.prod.elements.len)
+            return if (self.isDotAtEnd())
                     null
                 else
                     self.prod.elements[self.dot];
@@ -40,22 +44,16 @@ fn Config(comptime Grammar: type) type {
 fn ConfigSet(comptime Grammar: type) type {
     return struct {
         const Self = @This();
-        const Set = std.AutoHashMap(Config(Grammar), void);
+        const Set = std.AutoHashMapUnmanaged(Config(Grammar), void);
 
-        configs: Set,
-
-        fn init(allocator: *Allocator) Self {
-            return .{
-                .configs = Set.init(allocator),
-            };
-        }
+        configs: Set = .{},
 
         fn initFromProductions(allocator: *Allocator, grammar: Grammar, initial: Grammar.NonTerminal) !Self {
-            var self = Self.init(allocator);
+            var self = Self{};
 
             for (grammar.productions) |*prod| {
                 if (prod.lhs == initial) {
-                    try self.configs.put(Config(Grammar).init(prod), {});
+                    try self.configs.put(allocator, Config(Grammar).init(prod), {});
                 }
             }
 
@@ -63,12 +61,12 @@ fn ConfigSet(comptime Grammar: type) type {
         }
 
 
-        fn deinit(self: *Self) void {
-            self.configs.deinit();
+        fn deinit(self: *Self, allocator: *Allocator) void {
+            self.configs.deinit(allocator);
         }
 
-        fn closure(self: *Self, grammar: Grammar) !void {
-            var queue = std.fifo.LinearFifo(Config(Grammar), .Dynamic).init(self.configs.allocator);
+        fn closure(self: *Self, allocator: *Allocator, grammar: Grammar) !void {
+            var queue = std.fifo.LinearFifo(Config(Grammar), .Dynamic).init(allocator);
             defer queue.deinit();
 
             var it = self.configs.iterator();
@@ -83,7 +81,7 @@ fn ConfigSet(comptime Grammar: type) type {
                     }
 
                     const new_config = Config(Grammar).init(prod);
-                    const result = try self.configs.getOrPut(new_config);
+                    const result = try self.configs.getOrPut(allocator, new_config);
                     if (!result.found_existing) {
                         try queue.writeItem(new_config);
                     }
@@ -91,15 +89,15 @@ fn ConfigSet(comptime Grammar: type) type {
             }
         }
 
-        fn successor(self: Self, grammar: Grammar, symbol: Grammar.Symbol) !Self {
-            var new_config_set = Self.init(self.configs.allocator);
-            errdefer new_config_set.deinit();
+        fn successor(self: Self, allocator: *Allocator, grammar: Grammar, symbol: Grammar.Symbol) !Self {
+            var new_config_set = Self{};
+            errdefer new_config_set.deinit(allocator);
 
             var it = self.configs.iterator();
             while (it.next()) |entry| {
                 const dot_symbol = entry.key.symAtDot() orelse continue;
                 if (std.meta.eql(dot_symbol, symbol)) {
-                    try new_config_set.configs.put(entry.key.successor() orelse continue, {});
+                    try new_config_set.configs.put(allocator, entry.key.successor() orelse continue, {});
                 }
             }
 
@@ -157,12 +155,12 @@ fn ConfigSet(comptime Grammar: type) type {
 }
 
 fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, start_symbol: Grammar.NonTerminal) !void {
-    var queue = std.fifo.LinearFifo(ConfigSet(Grammar), .Dynamic).init(allocator);
-    defer queue.deinit();
+    var family = std.ArrayList(ConfigSet(Grammar)).init(allocator);
+    defer family.deinit();
 
     var seen = std.HashMap(
         ConfigSet(Grammar),
-        void,
+        usize,
         ConfigSet(Grammar).hash,
         ConfigSet(Grammar).eql,
         std.hash_map.DefaultMaxLoadPercentage
@@ -174,14 +172,14 @@ fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, st
 
     {
         var initial = try ConfigSet(Grammar).initFromProductions(allocator, grammar, start_symbol);
-        try initial.closure(grammar);
-        try seen.put(initial, {});
-        try queue.writeItem(initial);
+        try initial.closure(allocator, grammar);
+        try seen.put(initial, 0);
+        try family.append(initial);
     }
 
-    while (queue.readItem()) |config_set| {
-        std.debug.print("----\n", .{});
-        config_set.dump();
+    var i: usize = 0;
+    while (i < family.items.len) : (i += 1) {
+        const config_set = family.items[i];
 
         seen_syms.clearRetainingCapacity();
 
@@ -192,14 +190,20 @@ fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, st
                 continue;
             }
 
-            var new_config_set = try config_set.successor(grammar, sym);
-            try new_config_set.closure(grammar);
+            var new_config_set = try config_set.successor(allocator, grammar, sym);
+            try new_config_set.closure(allocator, grammar);
 
             const result = try seen.getOrPut(new_config_set);
             if (!result.found_existing) {
-                try queue.writeItem(new_config_set);
+                result.entry.value = family.items.len;
+                try family.append(new_config_set);
             }
         }
+    }
+
+    for (family.items) |config_set| {
+        config_set.dump();
+        std.debug.print("----\n", .{});
     }
 }
 
