@@ -8,6 +8,8 @@ const Terminal = enum {
     plus,
     lparen,
     rparen,
+    lbracket,
+    rbracket,
 
     pub fn format(self: Terminal, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         const text = switch (self) {
@@ -15,6 +17,8 @@ const Terminal = enum {
             .plus => "+",
             .lparen => "(",
             .rparen => ")",
+            .lbracket => "[",
+            .rbracket => "]",
         };
 
         try writer.print("'{}'", .{ text });
@@ -41,6 +45,7 @@ test "main" {
         .{.lhs = .E, .elements = &[_]G.Symbol{ G.nt(.E), G.t(.plus), G.nt(.T) }},
         .{.lhs = .T, .elements = &[_]G.Symbol{ G.t(.id) }},
         .{.lhs = .T, .elements = &[_]G.Symbol{ G.t(.lparen), G.nt(.E), G.t(.rparen) }},
+        // .{.lhs = .T, .elements = &[_]G.Symbol{ G.t(.id), G.t(.lbracket), G.nt(.E), G.t(.rbracket) }},
     });
 
     try lr0.generate(std.testing.allocator, g, .S);

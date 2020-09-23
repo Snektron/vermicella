@@ -175,7 +175,10 @@ fn ConfigSet(comptime Grammar: type) type {
 
 fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, start_symbol: Grammar.NonTerminal) ![]ConfigSet(Grammar) {
     var family = std.ArrayList(ConfigSet(Grammar)).init(allocator);
-    errdefer family.deinit();
+    errdefer {
+        for (family.items) |*config_set| config_set.deinit(allocator);
+        family.deinit();
+    }
 
     var seen = std.HashMap(
         ConfigSet(Grammar),
@@ -185,9 +188,6 @@ fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, st
         std.hash_map.DefaultMaxLoadPercentage
     ).init(allocator);
     defer seen.deinit();
-
-    // var seen_syms = std.AutoHashMap(Grammar.Symbol, void).init(allocator);
-    // defer seen_syms.deinit();
 
     {
         var initial = try ConfigSet(Grammar).initFromProductions(allocator, grammar, start_symbol);
@@ -199,7 +199,6 @@ fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, st
     var i: usize = 0;
     while (i < family.items.len) : (i += 1) {
         const config_set = family.items[i];
-        // seen_syms.clearRetainingCapacity();
 
         var reduced = false;
         var accepted_or_shifted = false;
@@ -218,12 +217,8 @@ fn lr0Family(comptime Grammar: type, allocator: *Allocator, grammar: Grammar, st
             };
             accepted_or_shifted = true;
 
-            // TODO: Fix
-            // if ((try seen_syms.getOrPut(sym)).found_existing) {
-            //     continue;
-            // }
-
             var new_config_set = try config_set.successor(allocator, grammar, sym);
+            errdefer new_config_set.deinit(allocator);
             try new_config_set.closure(allocator, grammar);
 
             const result = try seen.getOrPut(new_config_set);
