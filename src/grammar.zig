@@ -16,12 +16,12 @@ pub fn Grammar(comptime T: type, comptime NT: type) type {
             elements: []Symbol,
 
             pub fn format(self: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-                try writer.print("{} -> ", .{ self.lhs });
+                try writer.print("{} ->", .{ self.lhs });
 
                 for (self.elements) |element, i| {
                     switch (element) {
-                        .terminal => |sym| try writer.print("{} ", .{ sym }),
-                        .non_terminal => |sym| try writer.print("{} ", .{ sym }),
+                        .terminal => |sym| try writer.print(" '{}'", .{ sym }),
+                        .non_terminal => |sym| try writer.print(" {}", .{ sym }),
                     }
                 }
             }
