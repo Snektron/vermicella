@@ -27,10 +27,14 @@ pub fn Grammar(comptime T: type, comptime NT: type) type {
             }
         };
 
+        start: NonTerminal,
+        eof: Terminal,
         productions: []Production,
 
-        pub fn init(productions: []Production) Self {
+        pub fn init(start: NonTerminal, eof: Terminal, productions: []Production) Self {
             return .{
+                .start = start,
+                .eof = eof,
                 .productions = productions,
             };
         }

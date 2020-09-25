@@ -10,6 +10,7 @@ const Terminal = enum {
     rparen,
     lbracket,
     rbracket,
+    eof,
 
     pub fn format(self: Terminal, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         const text = switch (self) {
@@ -19,6 +20,7 @@ const Terminal = enum {
             .rparen => ")",
             .lbracket => "[",
             .rbracket => "]",
+            .eof => "$",
         };
 
         try writer.print("'{}'", .{ text });
@@ -39,8 +41,8 @@ test "main" {
     std.debug.print("\n", .{});
 
     const G = grammar.Grammar(Terminal, NonTerminal);
-    const g = G.init(&[_]G.Production{
-        .{.lhs = .S, .elements = &[_]G.Symbol{ G.nt(.E) }},
+    const g = G.init(.S, .eof, &[_]G.Production{
+        .{.lhs = .S, .elements = &[_]G.Symbol{ G.nt(.E), G.t(.eof) }},
         .{.lhs = .E, .elements = &[_]G.Symbol{ G.nt(.T) }},
         .{.lhs = .E, .elements = &[_]G.Symbol{ G.nt(.E), G.t(.plus), G.nt(.T) }},
         .{.lhs = .T, .elements = &[_]G.Symbol{ G.t(.id) }},
@@ -48,5 +50,5 @@ test "main" {
         // .{.lhs = .T, .elements = &[_]G.Symbol{ G.t(.id), G.t(.lbracket), G.nt(.E), G.t(.rbracket) }},
     });
 
-    try lr0.generate(std.testing.allocator, g, .S);
+    try lr0.generate(std.testing.allocator, g);
 }
