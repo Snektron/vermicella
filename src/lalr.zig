@@ -9,7 +9,13 @@ pub fn Generator(comptime Grammar: type) type {
         const Symbol = Grammar.Symbol;
         const Production = Grammar.Production;
         const TerminalSet = std.AutoHashMapUnmanaged(Terminal, void);
-        const ConfigSet = std.AutoHashMapUnmanaged(Config, TerminalSet);
+
+        const ConfigData = struct {
+            lookahead_set: TerminalSet,
+            action: ParseTable(Grammar).Action,
+        };
+
+        const ConfigSet = std.AutoHashMapUnmanaged(Config, ConfigData);
 
         arena: std.heap.ArenaAllocator,
         grammar: Grammar,
@@ -79,7 +85,7 @@ pub fn Generator(comptime Grammar: type) type {
             while (it.next()) |entry| {
                 const config = entry.key;
                 std.debug.print("{}, ", .{ entry.key });
-                var lookahead_it = entry.value.iterator();
+                var lookahead_it = entry.value.lookahead_set.iterator();
                 var is_first = true;
                 while (lookahead_it.next()) |lookahead| {
                     if (is_first) {
@@ -144,10 +150,11 @@ pub fn Generator(comptime Grammar: type) type {
 
         fn putConfig(self: *Self, config_set: *ConfigSet, config: Config, lookahead: Terminal) !bool {
             const result = try config_set.getOrPut(&self.arena.allocator, config);
+            const config_data = &result.entry.value;
             if (!result.found_existing) {
-                result.entry.value = .{};
+                config_data.* = .{.lookahead_set = .{}, .action = undefined};
             }
-            const lookahead_result = try result.entry.value.getOrPut(&self.arena.allocator, lookahead);
+            const lookahead_result = try config_data.lookahead_set.getOrPut(&self.arena.allocator, lookahead);
             return lookahead_result.found_existing;
         }
 
@@ -176,7 +183,7 @@ pub fn Generator(comptime Grammar: type) type {
             {
                 var it = config_set.iterator();
                 while (it.next()) |entry| {
-                    var lookahead_it = entry.value.iterator();
+                    var lookahead_it = entry.value.lookahead_set.iterator();
                     while (lookahead_it.next()) |lookahead| {
                         try queue.writeItem(.{.config = entry.key, .lookahead = lookahead.key});
                     }
@@ -212,7 +219,7 @@ pub fn Generator(comptime Grammar: type) type {
                 const dot_symbol = entry.key.symAtDot() orelse continue;
                 if (std.meta.eql(dot_symbol, symbol)) {
                     const succ = entry.key.successor() orelse continue;
-                    var lookahead_it = entry.value.iterator();
+                    var lookahead_it = entry.value.lookahead_set.iterator();
                     while (lookahead_it.next()) |lookahead| {
                         _ = try self.putConfig(&new_config_set, succ, lookahead.key);
                     }
@@ -223,14 +230,19 @@ pub fn Generator(comptime Grammar: type) type {
             return new_config_set;
         }
 
-        fn mergeConfigSets(self: *Self, into: *ConfigSet, from: *const ConfigSet) !void {
+        fn mergeConfigSets(self: *Self, into: *ConfigSet, from: *const ConfigSet) !bool {
+            var changed = false;
             var it = from.iterator();
             while (it.next()) |entry| {
-                var lookahead_it = entry.value.iterator();
+                var lookahead_it = entry.value.lookahead_set.iterator();
                 while (lookahead_it.next()) |lookahead| {
-                    _ = try self.putConfig(into, entry.key, lookahead.key);
+                    const found_existing = try self.putConfig(into, entry.key, lookahead.key);
+                    if (!found_existing) {
+                        changed = true;
+                    }
                 }
             }
+            return changed;
         }
 
         fn configSetHash(config_set: ConfigSet) u64 {
@@ -273,8 +285,8 @@ pub fn Generator(comptime Grammar: type) type {
 
         fn generate(self: *Self) !ParseTable(Grammar) {
             var parse_table = ParseTable(Grammar){};
-
             var family = std.ArrayList(ConfigSet).init(&self.arena.allocator);
+            var queue = std.fifo.LinearFifo(usize, .Dynamic).init(&self.arena.allocator);
 
             var seen = std.HashMap(
                 ConfigSet,
@@ -287,55 +299,86 @@ pub fn Generator(comptime Grammar: type) type {
             {
                 const initial = try self.initialConfigSet();
                 try seen.put(initial, family.items.len);
+                try queue.writeItem(family.items.len);
                 try family.append(initial);
             }
 
-            var i: usize = 0;
-            while (i < family.items.len) : (i += 1) {
-                const config_set = family.items[i];
-
+            while (queue.readItem()) |config_set_index| {
+                const config_set = family.items[config_set_index];
                 var it = config_set.iterator();
                 while (it.next()) |entry| {
-                    const sym = entry.key.symAtDot() orelse {
-                        if (std.meta.eql(entry.key.prod.lhs, self.grammar.start)) {
-                            std.debug.print("Action[{}, $] = accept {}\n", .{ i, entry.key.prod });
-                            try parse_table.putAction(self.arena.child_allocator, i, self.grammar.eof, .{.accept = entry.key.prod });
+                    const config = entry.key;
+                    const config_data = &entry.value;
+
+                    const sym = config.symAtDot() orelse {
+                        if (std.meta.eql(config.prod.lhs, self.grammar.start)) {
+                            config_data.action = .{.accept = config.prod};
                         } else {
-                            var lookahead_it = entry.value.iterator();
-                            while (lookahead_it.next()) |lookahead| {
-                                std.debug.print("Action[{}, {}] = reduce {}\n", .{ i, lookahead.key, entry.key.prod });
-                                try parse_table.putAction(self.arena.child_allocator, i, lookahead.key, .{.reduce = entry.key.prod });
-                            }
+                            config_data.action = .{.reduce = config.prod};
                         }
                         continue;
                     };
+
                     const new_config_set = try self.successor(&config_set, sym);
                     const result = try seen.getOrPut(new_config_set);
                     if (result.found_existing) {
-                        const family_index = result.entry.value;
-                        try self.mergeConfigSets(&family.items[family_index], &new_config_set);
+                        const existing_index = result.entry.value;
+                        if (existing_index != config_set_index) {
+                            const changed = try self.mergeConfigSets(&family.items[existing_index], &new_config_set);
+                            if (changed) {
+                                try queue.writeItem(existing_index);
+                            }
+                        }
                     } else {
                         result.entry.value = family.items.len;
+                        try queue.writeItem(family.items.len);
                         try family.append(new_config_set);
                     }
 
                     const new_state = result.entry.value;
-                    switch (sym) {
-                        .terminal => |t| {
-                            std.debug.print("Action[{}, {}] = shift {}\n", .{ i, t, result.entry.value });
-                            try parse_table.putAction(self.arena.child_allocator, i, t, .{.shift = new_state });
-                        },
-                        .non_terminal => |nt| {
-                            std.debug.print("Goto[{}, {}] = {}\n", .{ i, nt, result.entry.value });
-                            try parse_table.putGoto(self.arena.child_allocator, i, nt, new_state);
-                        },
-                    }
+                    config_data.action = .{.shift = new_state};
                 }
             }
 
             for (family.items) |config_set, j| {
                 std.debug.print("---- config set {}:\n", .{ j });
                 self.dumpConfigSet(config_set);
+            }
+
+            for (family.items) |config_set, state| {
+                var it = config_set.iterator();
+                while (it.next()) |entry| {
+                    const config = entry.key;
+                    const lookahead_set = entry.value.lookahead_set;
+                    const action = entry.value.action;
+
+                    switch (action) {
+                        .accept => |prod| {
+                            std.debug.print("Action[{}, $] = accept {}\n", .{ state, prod });
+                            try parse_table.putAction(self.arena.child_allocator, state, self.grammar.eof, action);
+                        },
+                        .reduce => |prod| {
+                            var lookahead_it = lookahead_set.iterator();
+                            while (lookahead_it.next()) |lookahead| {
+                                std.debug.print("Action[{}, {}] = reduce {}\n", .{ state, lookahead.key, prod });
+                                try parse_table.putAction(self.arena.child_allocator, state, lookahead.key, action);
+                            }
+                        },
+                        .shift => |new_state| {
+                            const sym = config.symAtDot().?;
+                            switch (sym) {
+                                .terminal => |t| {
+                                    std.debug.print("Action[{}, {}] = shift {}\n", .{ state, t, new_state });
+                                    try parse_table.putAction(self.arena.child_allocator, state, t, action);
+                                },
+                                .non_terminal => |nt| {
+                                    std.debug.print("Goto[{}, {}] = {}\n", .{ state, nt, new_state });
+                                    try parse_table.putGoto(self.arena.child_allocator, state, nt, new_state);
+                                }
+                            }
+                        },
+                    }
+                }
             }
 
             return parse_table;
@@ -421,4 +464,51 @@ pub fn generate(comptime Grammar: type, allocator: *Allocator, grammar: Grammar)
     defer generator.arena.deinit();
 
     return try generator.generate();
+}
+
+pub fn Parser(comptime Grammar: type) type {
+    return struct {
+        const Self = @This();
+        pub const Action = ParseTable(Grammar).Action;
+
+        parse_table: *const ParseTable(Grammar),
+        state_stack: std.ArrayList(usize),
+
+        pub fn init(allocator: *Allocator, parse_table: *const ParseTable(Grammar)) !Self {
+            var self = Self{
+                .parse_table = parse_table,
+                .state_stack = std.ArrayList(usize).init(allocator),
+            };
+
+            try self.state_stack.append(0);
+            return self;
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.state_stack.deinit();
+        }
+
+        pub fn feed(self: *Self, terminal: Grammar.Terminal) !Action {
+            for (self.state_stack.items) |state| {
+                std.debug.print("{} ", .{ state });
+            }
+            std.debug.print(": {}\n", .{ terminal });
+
+            const state = self.state_stack.items[self.state_stack.items.len - 1];
+            const action = self.parse_table.getAction(state, terminal) orelse return error.ParseError;
+
+            switch (action) {
+                .shift => |new_state| try self.state_stack.append(new_state),
+                .reduce => |prod| {
+                    self.state_stack.items.len -= prod.elements.len;
+                    const prev_state = self.state_stack.items[self.state_stack.items.len - 1];
+                    const new_state = self.parse_table.getGoto(prev_state, prod.lhs) orelse return error.ParseError;
+                    try self.state_stack.append(new_state);
+                },
+                .accept => {},
+            }
+
+            return action;
+        }
+    };
 }

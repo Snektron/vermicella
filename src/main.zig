@@ -67,4 +67,20 @@ test "main" {
     defer parse_table.deinit(std.testing.allocator);
 
     std.debug.print("\n", .{});
+
+    var parser = try lalr.Parser(G).init(std.testing.allocator, &parse_table);
+    defer parser.deinit();
+
+    const input = [_]Terminal{ .b, .a, .a, .b, .eof };
+    outer: for (input) |t| {
+        while (true) {
+            const action = try parser.feed(t);
+            std.debug.print("{}\n", .{action});
+            switch (action) {
+                .shift => break,
+                .accept => break :outer,
+                .reduce => {},
+            }
+        }
+    }
 }
