@@ -266,7 +266,9 @@ pub fn Generator(comptime Grammar: type) type {
             }
         }
 
-        fn generate(self: *Self) ![]ConfigSet {
+        fn generate(self: *Self) !ParseTable(Grammar) {
+            var parse_table = ParseTable(Grammar){};
+
             var family = std.ArrayList(ConfigSet).init(&self.arena.allocator);
 
             var seen = std.HashMap(
@@ -291,11 +293,13 @@ pub fn Generator(comptime Grammar: type) type {
                 while (it.next()) |entry| {
                     const sym = entry.key.symAtDot() orelse {
                         if (std.meta.eql(entry.key.prod.lhs, self.grammar.start)) {
-                            std.debug.print("Action[{}, $] = accept\n", .{ i });
+                            std.debug.print("Action[{}, $] = accept {}\n", .{ i, entry.key.prod });
+                            try parse_table.putAction(self.arena.child_allocator, i, self.grammar.eof, .{.accept = entry.key.prod });
                         } else {
                             var lookahead_it = entry.value.iterator();
                             while (lookahead_it.next()) |lookahead| {
                                 std.debug.print("Action[{}, {}] = reduce {}\n", .{ i, lookahead.key, entry.key.prod });
+                                try parse_table.putAction(self.arena.child_allocator, i, lookahead.key, .{.reduce = entry.key.prod });
                             }
                         }
                         continue;
@@ -310,28 +314,103 @@ pub fn Generator(comptime Grammar: type) type {
                         try family.append(new_config_set);
                     }
 
+                    const new_state = result.entry.value;
                     switch (sym) {
-                        .terminal => |t| std.debug.print("Action[{}, {}] = shift {}\n", .{ i, t, result.entry.value }),
-                        .non_terminal => |nt| std.debug.print("Goto[{}, {}] = {}\n", .{ i, nt, result.entry.value })
+                        .terminal => |t| {
+                            std.debug.print("Action[{}, {}] = shift {}\n", .{ i, t, result.entry.value });
+                            try parse_table.putAction(self.arena.child_allocator, i, t, .{.shift = new_state });
+                        },
+                        .non_terminal => |nt| {
+                            std.debug.print("Goto[{}, {}] = {}\n", .{ i, nt, result.entry.value });
+                            try parse_table.putGoto(self.arena.child_allocator, i, nt, new_state);
+                        },
                     }
                 }
             }
 
-            return family.toOwnedSlice();
+            return parse_table;
         }
     };
 }
 
-pub fn generate(allocator: *Allocator, grammar: anytype) !void {
-    var generator = Generator(@TypeOf(grammar)){
+pub fn ParseTable(comptime Grammar: type) type {
+    return struct {
+        const Self = @This();
+        pub const Action = union(enum) {
+            shift: usize,
+            reduce: *const Grammar.Production,
+            accept: *const Grammar.Production,
+        };
+
+        pub const ActionMap = std.AutoHashMapUnmanaged(Grammar.Terminal, Action);
+        pub const GotoMap = std.AutoHashMapUnmanaged(Grammar.NonTerminal, usize);
+
+        action: std.ArrayListUnmanaged(ActionMap) = .{},
+        goto: std.ArrayListUnmanaged(GotoMap) = .{},
+
+        fn putAction(self: *Self, allocator: *Allocator, state: usize, terminal: Grammar.Terminal, action: Action) !void {
+            if (self.action.items.len <= state) {
+                const prev_len = self.action.items.len;
+                try self.action.resize(allocator, state + 1);
+                for (self.action.items[prev_len ..]) |*action_map| {
+                    action_map.* = .{};
+                }
+            }
+
+            const action_map = &self.action.items[state];
+            const result = try action_map.getOrPut(allocator, terminal);
+            if (result.found_existing) {
+                if (!std.meta.eql(result.entry.value, action)) {
+                    return error.Conflict;
+                }
+            } else {
+                result.entry.value = action;
+            }
+        }
+
+        fn putGoto(self: *Self, allocator: *Allocator, state: usize, non_terminal: Grammar.NonTerminal, new_state: usize) !void {
+            if (self.goto.items.len <= state) {
+                const prev_len = self.goto.items.len;
+                try self.goto.resize(allocator, state + 1);
+                for (self.goto.items[prev_len ..]) |*goto_map| {
+                    goto_map.* = .{};
+                }
+            }
+
+            const goto_map = &self.goto.items[state];
+            const result = try goto_map.getOrPut(allocator, non_terminal);
+            if (result.found_existing) {
+                if (result.entry.value != new_state) {
+                    return error.Conflict;
+                }
+            } else {
+                result.entry.value = new_state;
+            }
+        }
+
+        pub fn getAction(self: Self, state: usize, terminal: Grammar.Terminal) ?Action {
+            return self.action.items[state].get(terminal);
+        }
+
+        pub fn getGoto(self: Self, state: usize, non_terminal: Grammar.NonTerminal) ?usize {
+            return self.goto.items[state].get(non_terminal);
+        }
+
+        pub fn deinit(self: *Self, allocator: *Allocator) void {
+            for (self.action.items) |*action_map| action_map.deinit(allocator);
+            for (self.goto.items) |*goto_map| goto_map.deinit(allocator);
+            self.action.deinit(allocator);
+            self.goto.deinit(allocator);
+        }
+    };
+}
+
+pub fn generate(comptime Grammar: type, allocator: *Allocator, grammar: Grammar) !ParseTable(Grammar) {
+    var generator = Generator(Grammar){
         .arena = std.heap.ArenaAllocator.init(allocator),
         .grammar = grammar,
     };
     defer generator.arena.deinit();
 
-    const family = try generator.generate();
-    for (family) |config_set, i| {
-        std.debug.print("---- Configuration set {}:\n", .{ i });
-        generator.dumpConfigSet(config_set);
-    }
+    return try generator.generate();
 }
