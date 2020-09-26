@@ -1,6 +1,6 @@
 const std = @import("std");
 const grammar = @import("grammar.zig");
-const lr1 = @import("lr1.zig");
+const lalr = @import("lalr.zig");
 const testing = std.testing;
 
 const Terminal = enum {
@@ -10,7 +10,6 @@ const Terminal = enum {
     // rparen,
     // lbracket,
     // rbracket,
-    // eof,
     a,
     b,
     eof,
@@ -60,5 +59,5 @@ test "main" {
         // .{.lhs = .T, .elements = &[_]G.Symbol{ G.t(.id), G.t(.lbracket), G.nt(.E), G.t(.rbracket) }},
     });
 
-    try lr0.generate(std.testing.allocator, g);
+    try lalr.generate(std.testing.allocator, g);
 }

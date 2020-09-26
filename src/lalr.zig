@@ -42,7 +42,7 @@ pub fn Generator(comptime Grammar: type) type {
         const Symbol = Grammar.Symbol;
         const Production = Grammar.Production;
         const TerminalSet = std.AutoHashMapUnmanaged(Terminal, void);
-        const ConfigSet = std.AutoHashMapUnmanaged(Config, void);
+        const ConfigSet = std.AutoHashMapUnmanaged(Config, TerminalSet);
 
         arena: std.heap.ArenaAllocator,
         grammar: Grammar,
@@ -50,13 +50,11 @@ pub fn Generator(comptime Grammar: type) type {
         const Config = struct {
             prod: *const Production,
             dot: usize,
-            lookahead: Terminal,
 
-            fn init(prod: *const Production, lookahead: Terminal) Config {
+            fn init(prod: *const Production) Config {
                 return .{
                     .prod = prod,
                     .dot = 0,
-                    .lookahead = lookahead,
                 };
             }
 
@@ -68,7 +66,6 @@ pub fn Generator(comptime Grammar: type) type {
                 return Config{
                     .prod = self.prod,
                     .dot = self.dot + 1,
-                    .lookahead = self.lookahead,
                 };
             }
 
@@ -107,8 +104,6 @@ pub fn Generator(comptime Grammar: type) type {
                 if (self.prod.elements.len == self.dot) {
                     try writer.print(" •", .{});
                 }
-
-                try writer.print(", {}", .{ self.lookahead });
             }
         };
 
@@ -116,15 +111,25 @@ pub fn Generator(comptime Grammar: type) type {
             var it = config_set.iterator();
             while (it.next()) |entry| {
                 const config = entry.key;
-                std.debug.print("{}\n", .{ entry.key });
+                std.debug.print("{}, ", .{ entry.key });
+                var lookahead_it = entry.value.iterator();
+                var is_first = true;
+                while (lookahead_it.next()) |lookahead| {
+                    if (is_first) {
+                        is_first = false;
+                    } else {
+                        std.debug.print("/", .{});
+                    }
+                    std.debug.print("{}", .{ lookahead.key });
+                }
+                std.debug.print("\n", .{});
             }
         }
 
-        fn first(self: *Self, config: Config) !TerminalSet {
+        fn first(self: *Self, symbols: []const Symbol, lookahead: Terminal) !TerminalSet {
             var set = TerminalSet{};
             var seen = std.AutoHashMap(NonTerminal, void).init(&self.arena.allocator);
             var queue = std.fifo.LinearFifo(NonTerminal, .Dynamic).init(&self.arena.allocator);
-            const symbols = config.prod.elements[config.dot..];
 
             for (symbols) |sym| {
                 const start_nt = switch (sym) {
@@ -166,8 +171,17 @@ pub fn Generator(comptime Grammar: type) type {
                 }
             }
 
-            try set.put(&self.arena.allocator, config.lookahead, {});
+            try set.put(&self.arena.allocator, lookahead, {});
             return set;
+        }
+
+        fn putConfig(self: *Self, config_set: *ConfigSet, config: Config, lookahead: Terminal) !bool {
+            const result = try config_set.getOrPut(&self.arena.allocator, config);
+            if (!result.found_existing) {
+                result.entry.value = .{};
+            }
+            const lookahead_result = try result.entry.value.getOrPut(&self.arena.allocator, lookahead);
+            return lookahead_result.found_existing;
         }
 
         fn initialConfigSet(self: *Self) !ConfigSet {
@@ -176,8 +190,7 @@ pub fn Generator(comptime Grammar: type) type {
             for (self.grammar.productions) |*prod| {
                 if (prod.lhs == self.grammar.start) {
                     // TODO: Do something better for eof
-                    var config = Config.init(prod, self.grammar.eof);
-                    try config_set.put(&self.arena.allocator, config, {});
+                    _ = try self.putConfig(&config_set, Config.init(prod), self.grammar.eof);
                 }
             }
 
@@ -186,16 +199,27 @@ pub fn Generator(comptime Grammar: type) type {
         }
 
         fn closure(self: *Self, config_set: *ConfigSet) !void {
-            var queue = std.fifo.LinearFifo(Config, .Dynamic).init(&self.arena.allocator);
+            const QueueItem = struct {
+                config: Config,
+                lookahead: Terminal,
+            };
+
+            var queue = std.fifo.LinearFifo(QueueItem, .Dynamic).init(&self.arena.allocator);
 
             {
                 var it = config_set.iterator();
-                while (it.next()) |entry| try queue.writeItem(entry.key);
+                while (it.next()) |entry| {
+                    var lookahead_it = entry.value.iterator();
+                    while (lookahead_it.next()) |lookahead| {
+                        try queue.writeItem(.{.config = entry.key, .lookahead = lookahead.key});
+                    }
+                }
             }
 
-            while (queue.readItem()) |config| {
+            while (queue.readItem()) |item| {
+                const config = item.config;
                 const nt = config.ntAtDot() orelse continue;
-                const first_set = try self.first(config.successor().?);
+                const first_set = try self.first(config.prod.elements[config.dot + 1 ..], item.lookahead);
                 var it = first_set.iterator();
                 while (it.next()) |lookahead| {
                     for (self.grammar.productions) |*prod| {
@@ -203,10 +227,10 @@ pub fn Generator(comptime Grammar: type) type {
                             continue;
                         }
 
-                        const new_config = Config.init(prod, lookahead.key);
-                        const result = try config_set.getOrPut(&self.arena.allocator, new_config);
-                        if (!result.found_existing) {
-                            try queue.writeItem(new_config);
+                        const new_config = Config.init(prod);
+                        const found_existing = try self.putConfig(config_set, Config.init(prod), lookahead.key);
+                        if (!found_existing) {
+                            try queue.writeItem(.{.config = new_config, .lookahead = lookahead.key});
                         }
                     }
                 }
@@ -221,12 +245,25 @@ pub fn Generator(comptime Grammar: type) type {
                 const dot_symbol = entry.key.symAtDot() orelse continue;
                 if (std.meta.eql(dot_symbol, symbol)) {
                     const succ = entry.key.successor() orelse continue;
-                    try new_config_set.put(&self.arena.allocator, succ, {});
+                    var lookahead_it = entry.value.iterator();
+                    while (lookahead_it.next()) |lookahead| {
+                        _ = try self.putConfig(&new_config_set, succ, lookahead.key);
+                    }
                 }
             }
 
             try self.closure(&new_config_set);
             return new_config_set;
+        }
+
+        fn mergeConfigSets(self: *Self, into: *ConfigSet, from: *const ConfigSet) !void {
+            var it = from.iterator();
+            while (it.next()) |entry| {
+                var lookahead_it = entry.value.iterator();
+                while (lookahead_it.next()) |lookahead| {
+                    _ = try self.putConfig(into, entry.key, lookahead.key);
+                }
+            }
         }
 
         fn generate(self: *Self) ![]ConfigSet {
@@ -256,13 +293,19 @@ pub fn Generator(comptime Grammar: type) type {
                         if (std.meta.eql(entry.key.prod.lhs, self.grammar.start)) {
                             std.debug.print("Action[{}, $] = accept\n", .{ i });
                         } else {
-                            std.debug.print("Action[{}, {}] = reduce {}\n", .{ i, entry.key.lookahead, entry.key.prod });
+                            var lookahead_it = entry.value.iterator();
+                            while (lookahead_it.next()) |lookahead| {
+                                std.debug.print("Action[{}, {}] = reduce {}\n", .{ i, lookahead.key, entry.key.prod });
+                            }
                         }
                         continue;
                     };
                     const new_config_set = try self.successor(&config_set, sym);
                     const result = try seen.getOrPut(new_config_set);
-                    if (!result.found_existing) {
+                    if (result.found_existing) {
+                        const family_index = result.entry.value;
+                        try self.mergeConfigSets(&family.items[family_index], &new_config_set);
+                    } else {
                         result.entry.value = family.items.len;
                         try family.append(new_config_set);
                     }
