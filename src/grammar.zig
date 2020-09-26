@@ -13,7 +13,7 @@ pub fn Grammar(comptime T: type, comptime NT: type) type {
 
         pub const Production = struct {
             lhs: NonTerminal,
-            elements: []Symbol,
+            elements: []const Symbol,
 
             pub fn format(self: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
                 try writer.print("{} ->", .{ self.lhs });
@@ -29,9 +29,9 @@ pub fn Grammar(comptime T: type, comptime NT: type) type {
 
         start: NonTerminal,
         eof: Terminal,
-        productions: []Production,
+        productions: []const Production,
 
-        pub fn init(start: NonTerminal, eof: Terminal, productions: []Production) Self {
+        pub fn init(start: NonTerminal, eof: Terminal, productions: []const Production) Self {
             return .{
                 .start = start,
                 .eof = eof,

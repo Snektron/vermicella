@@ -1,39 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-fn getHashSetHashFn(comptime HashSet: type, comptime child_hasher: anytype) (fn (HashSet) u64) {
-    return struct {
-        fn hash(hash_set: HashSet) u64 {
-            var value: u64 = 0;
-            var it = hash_set.iterator();
-            while (it.next()) |entry| {
-                value ^= child_hasher(entry.key);
-            }
-
-            return value;
-        }
-    }.hash;
-}
-
-fn getHashSetEqlFn(comptime HashSet: type, comptime child_hasher: anytype) (fn (HashSet, HashSet) bool) {
-    return struct {
-        fn eql(lhs: HashSet, rhs: HashSet) bool {
-            if (lhs.count() != rhs.count()) {
-                return false;
-            }
-
-            var it = lhs.iterator();
-            while (it.next()) |entry| {
-                if (!rhs.contains(entry.key)) {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-    }.eql;
-}
-
 pub fn Generator(comptime Grammar: type) type {
     return struct {
         const Self = @This();
@@ -266,6 +233,44 @@ pub fn Generator(comptime Grammar: type) type {
             }
         }
 
+        fn configSetHash(config_set: ConfigSet) u64 {
+            const config_hasher = comptime std.hash_map.getAutoHashFn(Config);
+
+            var value: u64 = 0;
+            var it = config_set.iterator();
+            while (it.next()) |entry| {
+                value ^= config_hasher(entry.key);
+            }
+
+            return value;
+        }
+
+        fn configSetEql(lhs: ConfigSet, rhs: ConfigSet) bool {
+            if (lhs.count() != rhs.count()) {
+                return false;
+            }
+
+            {
+                var it = lhs.iterator();
+                while (it.next()) |entry| {
+                    if (!rhs.contains(entry.key)) {
+                        return false;
+                    }
+                }
+            }
+
+            {
+                var it = rhs.iterator();
+                while (it.next()) |entry| {
+                    if (!lhs.contains(entry.key)) {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
         fn generate(self: *Self) !ParseTable(Grammar) {
             var parse_table = ParseTable(Grammar){};
 
@@ -274,8 +279,8 @@ pub fn Generator(comptime Grammar: type) type {
             var seen = std.HashMap(
                 ConfigSet,
                 usize,
-                comptime getHashSetHashFn(ConfigSet, comptime std.hash_map.getAutoHashFn(Config)),
-                comptime getHashSetEqlFn(ConfigSet, comptime std.hash_map.getAutoEqlFn(Config)),
+                configSetHash,
+                configSetEql,
                 std.hash_map.DefaultMaxLoadPercentage
             ).init(&self.arena.allocator);
 
@@ -328,9 +333,24 @@ pub fn Generator(comptime Grammar: type) type {
                 }
             }
 
+            for (family.items) |config_set, j| {
+                std.debug.print("---- config set {}:\n", .{ j });
+                self.dumpConfigSet(config_set);
+            }
+
             return parse_table;
         }
     };
+}
+
+fn ensureSize(comptime Item: type, allocator: *Allocator, array_list: *std.ArrayListUnmanaged(Item), size: usize, default: Item) !void {
+    if (array_list.items.len < size) {
+        const prev_size = array_list.items.len;
+        try array_list.resize(allocator, size);
+        for (array_list.items[prev_size ..]) |*item| {
+            item.* = default;
+        }
+    }
 }
 
 pub fn ParseTable(comptime Grammar: type) type {
@@ -349,13 +369,7 @@ pub fn ParseTable(comptime Grammar: type) type {
         goto: std.ArrayListUnmanaged(GotoMap) = .{},
 
         fn putAction(self: *Self, allocator: *Allocator, state: usize, terminal: Grammar.Terminal, action: Action) !void {
-            if (self.action.items.len <= state) {
-                const prev_len = self.action.items.len;
-                try self.action.resize(allocator, state + 1);
-                for (self.action.items[prev_len ..]) |*action_map| {
-                    action_map.* = .{};
-                }
-            }
+            try ensureSize(ActionMap, allocator, &self.action, state + 1, .{});
 
             const action_map = &self.action.items[state];
             const result = try action_map.getOrPut(allocator, terminal);
@@ -369,13 +383,7 @@ pub fn ParseTable(comptime Grammar: type) type {
         }
 
         fn putGoto(self: *Self, allocator: *Allocator, state: usize, non_terminal: Grammar.NonTerminal, new_state: usize) !void {
-            if (self.goto.items.len <= state) {
-                const prev_len = self.goto.items.len;
-                try self.goto.resize(allocator, state + 1);
-                for (self.goto.items[prev_len ..]) |*goto_map| {
-                    goto_map.* = .{};
-                }
-            }
+            try ensureSize(GotoMap, allocator, &self.goto, state + 1, .{});
 
             const goto_map = &self.goto.items[state];
             const result = try goto_map.getOrPut(allocator, non_terminal);
