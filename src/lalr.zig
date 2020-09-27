@@ -340,11 +340,6 @@ pub fn Generator(comptime Grammar: type) type {
                 }
             }
 
-            for (family.items) |config_set, j| {
-                std.debug.print("---- config set {}:\n", .{ j });
-                self.dumpConfigSet(config_set);
-            }
-
             for (family.items) |config_set, state| {
                 var it = config_set.iterator();
                 while (it.next()) |entry| {
@@ -354,13 +349,11 @@ pub fn Generator(comptime Grammar: type) type {
 
                     switch (action) {
                         .accept => |prod| {
-                            std.debug.print("Action[{}, $] = accept {}\n", .{ state, prod });
                             try parse_table.putAction(self.arena.child_allocator, state, self.grammar.eof, action);
                         },
                         .reduce => |prod| {
                             var lookahead_it = lookahead_set.iterator();
                             while (lookahead_it.next()) |lookahead| {
-                                std.debug.print("Action[{}, {}] = reduce {}\n", .{ state, lookahead.key, prod });
                                 try parse_table.putAction(self.arena.child_allocator, state, lookahead.key, action);
                             }
                         },
@@ -368,11 +361,9 @@ pub fn Generator(comptime Grammar: type) type {
                             const sym = config.symAtDot().?;
                             switch (sym) {
                                 .terminal => |t| {
-                                    std.debug.print("Action[{}, {}] = shift {}\n", .{ state, t, new_state });
                                     try parse_table.putAction(self.arena.child_allocator, state, t, action);
                                 },
                                 .non_terminal => |nt| {
-                                    std.debug.print("Goto[{}, {}] = {}\n", .{ state, nt, new_state });
                                     try parse_table.putGoto(self.arena.child_allocator, state, nt, new_state);
                                 }
                             }
@@ -489,11 +480,6 @@ pub fn Parser(comptime Grammar: type) type {
         }
 
         pub fn feed(self: *Self, terminal: Grammar.Terminal) !Action {
-            for (self.state_stack.items) |state| {
-                std.debug.print("{} ", .{ state });
-            }
-            std.debug.print(": {}\n", .{ terminal });
-
             const state = self.state_stack.items[self.state_stack.items.len - 1];
             const action = self.parse_table.getAction(state, terminal) orelse return error.ParseError;
 
@@ -511,4 +497,80 @@ pub fn Parser(comptime Grammar: type) type {
             return action;
         }
     };
+}
+
+test "lalr" {
+    const Terminal = enum {
+        id,
+        plus,
+        lparen,
+        rparen,
+        lbracket,
+        rbracket,
+        eof,
+    };
+
+    const NonTerminal = enum {
+        S,
+        E,
+        T,
+    };
+
+    const G = @import("grammar.zig").Grammar(Terminal, NonTerminal);
+
+    const productions = comptime [_]G.Production{
+        .{.lhs = .S, .elements = &[_]G.Symbol{ G.nt(.E) }},
+        .{.lhs = .E, .elements = &[_]G.Symbol{ G.nt(.T) }},
+        .{.lhs = .E, .elements = &[_]G.Symbol{ G.nt(.E), G.t(.plus), G.nt(.T) }},
+        .{.lhs = .T, .elements = &[_]G.Symbol{ G.t(.id) }},
+        .{.lhs = .T, .elements = &[_]G.Symbol{ G.t(.lparen), G.nt(.E), G.t(.rparen) }},
+        .{.lhs = .T, .elements = &[_]G.Symbol{ G.t(.id), G.t(.lbracket), G.nt(.E), G.t(.rbracket) }},
+    };
+
+    const g = G.init(.S, .eof, &productions);
+
+    var parse_table = try generate(G, std.testing.allocator, g);
+    defer parse_table.deinit(std.testing.allocator);
+
+    var parser = try Parser(G).init(std.testing.allocator, &parse_table);
+    defer parser.deinit();
+
+    const input = [_]Terminal{
+        .id, .lbracket, .id, .plus, .id, .plus, .lparen, .id, .plus, .id, .rparen, .rbracket, .eof
+    };
+
+    const reductions = [_]*const G.Production{
+        &productions[3], // T -> 'id'
+        &productions[1], // E -> T
+        &productions[3], // T -> 'id'
+        &productions[2], // E -> E '+' T
+        &productions[3], // T -> 'id'
+        &productions[1], // E -> T
+        &productions[3], // T -> 'id'
+        &productions[2], // E -> E '+' T
+        &productions[4], // T -> '(' E ')'
+        &productions[2], // E -> E '+' T
+        &productions[5], // E -> 'id' '[' E ']'
+        &productions[1], // E -> T
+        &productions[0], // S -> E
+    };
+
+    var i: usize = 0;
+
+    outer: for (input) |t| {
+        while (true) {
+            const action = try parser.feed(t);
+            switch (action) {
+                .shift => break,
+                .accept => |prod| {
+                    std.testing.expect(prod == reductions[i]);
+                    break :outer;
+                },
+                .reduce => |prod| {
+                    std.testing.expect(prod == reductions[i]);
+                    i += 1;
+                },
+            }
+        }
+    }
 }
