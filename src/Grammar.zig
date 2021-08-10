@@ -27,7 +27,7 @@ productions: []const Production,
 pub const start_nonterminal: Nonterminal = 0;
 
 /// Return all productions which correspond to a particular nonterminal.
-fn productionsForNonterminal(self: Self, nt: Nonterminal) []const Production {
+pub fn productionsForNonterminal(self: Self, nt: Nonterminal) []const Production {
     const first_production = self.nonterminals[nt].first_production;
     const last_production = if (nt == self.nonterminals.len - 1)
         self.productions.len
@@ -65,6 +65,10 @@ pub const Production = struct {
     /// A human-readable tag identifying this production. Must be unique for all productions
     /// with the same left-hand side.
     tag: []const u8,
+
+    pub fn fmt(self: Production, g: *const Self) ProductionFormatter {
+        return ProductionFormatter{.prod = self, .g = g};
+    }
 };
 
 pub const Symbol = union(enum) {
@@ -77,6 +81,13 @@ pub const Symbol = union(enum) {
     /// The integer is continuously allocated, and forms an index into the
     /// grammar's `terminal_names` slice.
     terminal: usize,
+
+    pub fn fmt(self: Symbol, g: *const Self) SymbolFormatter {
+        return return SymbolFormatter{
+            .g = g,
+            .sym = self,
+        };
+    }
 };
 
 const ProductionFormatter = struct {
@@ -94,17 +105,10 @@ const ProductionFormatter = struct {
 
         try writer.print("{s} ->", .{ self.g.nonterminals[prod.lhs].name });
         for (prod.rhs) |sym| {
-            try writer.print(" {q}", .{ self.g.fmtSymbol(sym) });
+            try writer.print(" {q}", .{ sym.fmt(g) });
         }
     }
 };
-
-pub fn fmtProduction(self: *const Self, prod: usize) ProductionFormatter {
-    return ProductionFormatter{
-        .g = self,
-        .prod = prod,
-    };
-}
 
 const SymbolFormatter = struct {
     g: *const Self,
@@ -121,13 +125,6 @@ const SymbolFormatter = struct {
         }
     }
 };
-
-pub fn fmtSymbol(self: *const Self, sym: Symbol) SymbolFormatter {
-    return SymbolFormatter{
-        .g = self,
-        .sym = sym,
-    };
-}
 
 pub fn fmtTerminal(self: *const Self, t: Terminal) SymbolFormatter {
     return SymbolFormatter{

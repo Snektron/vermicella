@@ -7,8 +7,8 @@ test "main" {
         .terminals = &.{"a", "+", "(", ")"},
         .nonterminals = &.{
             .{.name = "S", .first_production = 0},
-            .{.name = "E", .first_production = 0},
-            .{.name = "T", .first_production = 0},
+            .{.name = "E", .first_production = 1},
+            .{.name = "T", .first_production = 3},
         },
         .productions = &.{
             .{.lhs = 0, .rhs = &.{.{.nonterminal = 1}}, .tag = "start"},
@@ -20,7 +20,11 @@ test "main" {
     };
 
     std.debug.print("\n", .{});
-    // g.dump();
-    const generator = lalr.Generator{.g = &g, .allocator = std.testing.allocator};
+    var generator = lalr.Generator{
+        .g = &g,
+        .arena = std.heap.ArenaAllocator.init(std.testing.allocator),
+    };
+    defer generator.arena.deinit();
+
     try generator.generate();
 }
