@@ -4,19 +4,20 @@ const Allocator = std.mem.Allocator;
 const Grammar = @import("Grammar.zig");
 const Symbol = Grammar.Symbol;
 const Nonterminal = Grammar.Nonterminal;
+const Production = Grammar.Production;
 
 const LookaheadSet = @import("lookahead.zig").LookaheadSet;
 
 const Item = struct {
     /// Index of the associated production in the grammar's `productions` slice.
-    production: usize,
+    production: *const Production,
 
     /// Offset of the dot.
     /// The dot sits between symbols `dot - 1` and `dot`.
     dot: usize,
 
     /// Initialize an item, with the dot at the start.
-    fn init(production: usize) Item {
+    fn init(production: *const Production) Item {
         return .{
             .production = production,
             .dot = 0,
@@ -24,35 +25,35 @@ const Item = struct {
     }
 
     /// Tell whether the dot is at the end of the item.
-    fn isDotAtEnd(self: Item, g: *const Grammar) bool {
-        return self.dot == g.productions[self.production].rhs.len;
+    fn isDotAtEnd(self: Item) bool {
+        return self.dot == self.production.rhs.len;
     }
 
     /// Shift the dot over to the next symbol. If the dot was currently at the end, this function
     /// returns `null`.
-    fn shift(self: Item, g: *const Grammar) ?Item {
-        return if (self.isDotAtEnd(g))
+    fn shift(self: Item) ?Item {
+        return if (self.isDotAtEnd())
             null
         else
             Item{.production = self.production, .dot = self.dot + 1};
     }
 
-    fn symAtDot(self: Item, g: *const Grammar) ?Symbol {
-        return if (self.isDotAtEnd(g))
+    fn symAtDot(self: Item) ?Symbol {
+        return if (self.isDotAtEnd())
             null
         else
-            g.productions[self.production].rhs[self.dot];
+            self.production.rhs[self.dot];
     }
 
-    fn symsAfterDot(self: Item, g: *const Grammar) []const Symbol {
-        return if (self.isDotAtEnd(g))
+    fn symsAfterDot(self: Item) []const Symbol {
+        return if (self.isDotAtEnd())
             &[_]Symbol{}
         else
-            g.productions[self.production].rhs[self.dot ..];
+            self.production.rhs[self.dot ..];
     }
 
-    fn nonterminalAtDot(self: Item, g: *const Grammar) ?Nonterminal {
-        const sym = self.symAtDot(g) orelse return null;
+    fn nonterminalAtDot(self: Item) ?Nonterminal {
+        const sym = self.symAtDot() orelse return null;
         return switch (sym) {
             .terminal => null,
             .nonterminal => |nt| nt,
@@ -72,7 +73,7 @@ const ItemFormatter = struct {
         _ = options;
         _ = fmt;
 
-        const production = self.g.productions[self.item.production];
+        const production = self.item.production;
         try writer.print("{s} ->", .{ self.g.nonterminals[production.lhs].name });
         for (production.rhs) |sym, i| {
             if (self.item.dot == i)
@@ -85,10 +86,6 @@ const ItemFormatter = struct {
         }
     }
 };
-
-fn fmtItem(item: Item, g: *const Grammar) ItemFormatter {
-    return ItemFormatter{ .item = item, .g = g };
-}
 
 const ItemSet = std.AutoHashMapUnmanaged(Item, LookaheadSet);
 
@@ -103,7 +100,7 @@ fn dumpItemSet(item_set: ItemSet, g: *const Grammar) void {
             } else {
                 std.debug.print("]\n [", .{});
             }
-            std.debug.print("{}, {}", .{ fmtItem(entry.key_ptr.*, g), entry.value_ptr.fmt(g) });
+            std.debug.print("{}, {}", .{ entry.key_ptr.fmt(g), entry.value_ptr.fmt(g) });
         }
 
         std.debug.print("]}}\n", .{});
@@ -241,7 +238,7 @@ pub const Generator = struct {
     fn initialItemSet(self: *Generator) !ItemSet {
         var item_set = ItemSet{};
 
-        for (self.g.productionsForNonterminal(Grammar.start_nonterminal)) |_, i| {
+        for (self.g.productionsForNonterminal(Grammar.start_nonterminal)) |*prod| {
             // For LALR, item sets may be merged, and so they cannot be treated as immutable. For this
             // reason, we need to make a new copy of the lookahead set with just eof for every start
             // production.
@@ -251,7 +248,7 @@ pub const Generator = struct {
             lookahead.insert(.eof);
 
             // i is unique for all elements we're going to insert here.
-            try item_set.putNoClobber(self.allocator(), Item.init(i), lookahead);
+            try item_set.putNoClobber(self.allocator(), Item.init(prod), lookahead);
         }
 
         try self.closure(&item_set);
@@ -269,12 +266,11 @@ pub const Generator = struct {
         }
 
         while (self.stack.popOrNull()) |entry| {
-            const nt = entry.item.nonterminalAtDot(self.g) orelse continue;
-            const v = entry.item.shift(self.g).?.symsAfterDot(self.g);
+            const nt = entry.item.nonterminalAtDot() orelse continue;
+            const v = entry.item.shift().?.symsAfterDot();
 
-            const j = self.g.nonterminals[nt].first_production;
-            for (self.g.productionsForNonterminal(nt)) |_, i| {
-                const item = Item.init(j + i);
+            for (self.g.productionsForNonterminal(nt)) |*prod| {
+                const item = Item.init(prod);
 
                 self.first_sets.first(&tmp, v, entry.lookahead, self.g);
 
@@ -301,11 +297,11 @@ pub const Generator = struct {
 
         var it = item_set.iterator();
         while (it.next()) |entry| {
-            const sym_at_dot = entry.key_ptr.symAtDot(self.g) orelse continue;
+            const sym_at_dot = entry.key_ptr.symAtDot() orelse continue;
             if (!std.meta.eql(sym_at_dot, sym))
                 continue;
 
-            const item = entry.key_ptr.shift(self.g).?;
+            const item = entry.key_ptr.shift().?;
             const lookahead = try entry.value_ptr.clone(self.allocator(), self.g);
 
             // Entries in the original item set are unique, so these are to.
