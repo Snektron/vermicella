@@ -213,6 +213,10 @@ pub const Generator = struct {
     g: *const Grammar,
     arena: std.heap.ArenaAllocator,
     first_sets: FirstSets,
+
+    /// Stack used to track which items still need to be processed
+    /// while computing a closure.
+    /// Cached in this struct.
     stack: std.ArrayListUnmanaged(StackEntry),
 
     pub fn init(backing: *Allocator, g: *const Grammar) !Generator {
@@ -233,6 +237,7 @@ pub const Generator = struct {
         self.* = undefined;
     }
 
+    /// Compute the initial item set.
     fn initialItemSet(self: *Generator) !ItemSet {
         var item_set = ItemSet{};
 
@@ -254,8 +259,8 @@ pub const Generator = struct {
         return item_set;
     }
 
+    /// Perform a closure operation on `item_set`.
     fn closure(self: *Generator, item_set: *ItemSet) !void {
-        // TODO: Cache memory
         var tmp = try LookaheadSet.init(self.allocator(), self.g);
 
         var it = item_set.iterator();
@@ -290,16 +295,36 @@ pub const Generator = struct {
         }
     }
 
+    /// Compute the successor item set of `item_set`.
+    fn successor(self: *Generator, item_set: ItemSet, sym: Symbol) !ItemSet {
+        var result = ItemSet{};
+
+        var it = item_set.iterator();
+        while (it.next()) |entry| {
+            const sym_at_dot = entry.key_ptr.symAtDot(self.g) orelse continue;
+            if (!std.meta.eql(sym_at_dot, sym))
+                continue;
+
+            const item = entry.key_ptr.shift(self.g).?;
+            const lookahead = try entry.value_ptr.clone(self.allocator(), self.g);
+
+            // Entries in the original item set are unique, so these are to.
+            try result.putNoClobber(self.allocator(), item, lookahead);
+        }
+
+        try self.closure(&result);
+        return result;
+    }
+
     pub fn generate(self: *Generator) !void {
         const initial = try self.initialItemSet();
         dumpItemSet(initial, self.g);
 
-        // const first_sets = try FirstSets.init(self.allocator(), self.g);
+        const succ = try self.successor(initial, .{.nonterminal = 1});
+        dumpItemSet(succ, self.g);
 
-        // first_sets.dump(self.g);
-
-        // self.g.dump();
-        // std.debug.print("{}\n", .{ Item.init(0).shift(self.g).?.fmt(&self.g) });
+        const succ1 = try self.successor(succ, .{.terminal = 1});
+        dumpItemSet(succ1, self.g);
     }
 
     pub fn allocator(self: *Generator) *Allocator {

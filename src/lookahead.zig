@@ -60,7 +60,7 @@ pub const LookaheadSet = struct {
 
     pub fn clone(self: LookaheadSet, allocator: *Allocator, g: *const Grammar) !LookaheadSet {
         const masks = try allocator.alloc(MaskInt, requiredMasks(g));
-        std.mem.cpy(MaskInt, masks, self.masks[0 .. requiredMasks(g)]);
+        std.mem.copy(MaskInt, masks, self.masks[0 .. requiredMasks(g)]);
         return LookaheadSet{.masks = masks.ptr};
     }
 
