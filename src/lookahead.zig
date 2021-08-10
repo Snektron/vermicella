@@ -58,6 +58,12 @@ pub const LookaheadSet = struct {
         self.* = undefined;
     }
 
+    pub fn clone(self: LookaheadSet, allocator: *Allocator, g: *const Grammar) !LookaheadSet {
+        const masks = try allocator.alloc(MaskInt, requiredMasks(g));
+        std.mem.cpy(MaskInt, masks, self.masks[0 .. requiredMasks(g)]);
+        return LookaheadSet{.masks = masks.ptr};
+    }
+
     /// Return the total amount of bits in the memory backing this lookahead set.
     fn requiredBits(g: *const Grammar) usize {
         return g.terminals.len + 1; // Add one for eof

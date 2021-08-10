@@ -41,8 +41,8 @@ pub fn productionsForNonterminal(self: Self, nt: Nonterminal) []const Production
 pub fn dump(self: Self) void {
     _ = self;
 
-    for (self.productions) |_, i| {
-        std.debug.print("{t}\n", .{ self.fmtProduction(i) });
+    for (self.productions) |prod| {
+        std.debug.print("{t}\n", .{ prod.fmt(&self) });
     }
 }
 
@@ -66,8 +66,8 @@ pub const Production = struct {
     /// with the same left-hand side.
     tag: []const u8,
 
-    pub fn fmt(self: Production, g: *const Self) ProductionFormatter {
-        return ProductionFormatter{.prod = self, .g = g};
+    pub fn fmt(self: *const Production, g: *const Self) ProductionFormatter {
+        return ProductionFormatter{.g = g, .prod = self};
     }
 };
 
@@ -83,29 +83,24 @@ pub const Symbol = union(enum) {
     terminal: usize,
 
     pub fn fmt(self: Symbol, g: *const Self) SymbolFormatter {
-        return return SymbolFormatter{
-            .g = g,
-            .sym = self,
-        };
+        return return SymbolFormatter{.g = g, .sym = self};
     }
 };
 
 const ProductionFormatter = struct {
     g: *const Self,
-    prod: usize,
+    prod: *const Production,
 
     pub fn format(self: ProductionFormatter, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = options;
 
-        const prod = self.g.productions[self.prod];
-
         if (std.mem.eql(u8, fmt, "t")) {
-            try writer.print("[{s}] ", .{prod.tag});
+            try writer.print("[{s}] ", .{self.prod.tag});
         }
 
-        try writer.print("{s} ->", .{ self.g.nonterminals[prod.lhs].name });
-        for (prod.rhs) |sym| {
-            try writer.print(" {q}", .{ sym.fmt(g) });
+        try writer.print("{s} ->", .{ self.g.nonterminals[self.prod.lhs].name });
+        for (self.prod.rhs) |sym| {
+            try writer.print(" {q}", .{ sym.fmt(self.g) });
         }
     }
 };

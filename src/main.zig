@@ -20,11 +20,8 @@ test "main" {
     };
 
     std.debug.print("\n", .{});
-    var generator = lalr.Generator{
-        .g = &g,
-        .arena = std.heap.ArenaAllocator.init(std.testing.allocator),
-    };
-    defer generator.arena.deinit();
+    var generator = try lalr.Generator.init(std.testing.allocator, &g);
+    defer generator.deinit();
 
     try generator.generate();
 }
