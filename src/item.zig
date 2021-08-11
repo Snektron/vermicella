@@ -13,11 +13,15 @@ pub const Item = struct {
     /// The dot sits between symbols `dot - 1` and `dot`.
     dot: usize,
 
+    /// The lookahead corresponding to this item.
+    lookahead: LookaheadSet,
+
     /// Initialize an item, with the dot at the start.
-    pub fn init(production: *const Production) Item {
+    pub fn init(production: *const Production, lookahead: LookaheadSet) Item {
         return .{
             .production = production,
             .dot = 0,
+            .lookahead = lookahead,
         };
     }
 
@@ -60,6 +64,32 @@ pub const Item = struct {
     fn fmt(self: Item, g: *const Grammar) ItemFormatter {
         return ItemFormatter{ .item = self, .g = g, };
     }
+
+    /// Order item sets.
+    /// Note: only the production and dot participate in order checks.
+    pub fn order(lhs: Item, rhs: Item) std.math.Order {
+        const production_cmp = std.math.order(@ptrToInt(lhs.production), @ptrToInt(rhs.production));
+        if (production_cmp != .eq)
+            return production_cmp;
+
+        return std.math.order(lhs.dot, rhs.dot);
+    }
+
+    pub const HashContext = struct {
+        /// Note: only the production and dot participate in the hash.
+        pub fn hash(self: HashContext, item: Item) u64 {
+            _ = self;
+            var hasher = std.hash.Wyhash.init(0);
+            hasher.update(std.mem.asBytes(&item.production));
+            hasher.update(std.mem.asBytes(&item.dot));
+            return hasher.final();
+        }
+
+        pub fn eql(self: HashContext, lhs: Item, rhs: Item) bool {
+            _ = self;
+            return order(lhs, rhs) == .eq;
+        }
+    };
 };
 
 const ItemFormatter = struct {
@@ -71,7 +101,7 @@ const ItemFormatter = struct {
         _ = fmt;
 
         const production = self.item.production;
-        try writer.print("{s} ->", .{ self.g.nonterminals[production.lhs].name });
+        try writer.print("[{s} ->", .{ self.g.nonterminals[production.lhs].name });
         for (production.rhs) |sym, i| {
             if (self.item.dot == i)
                 try writer.writeAll(" •");
@@ -81,70 +111,55 @@ const ItemFormatter = struct {
         if (self.item.dot == production.rhs.len) {
             try writer.writeAll(" •");
         }
+
+        try writer.print(", {}]", .{ self.item.lookahead.fmt(self.g) });
     }
 };
 
-pub const ItemSet = std.AutoHashMapUnmanaged(Item, LookaheadSet);
+pub const ItemSet = struct {
+    /// The items in this set. Should be ordered, and no duplicates should exist.
+    items: std.ArrayListUnmanaged(Item) = .{},
 
-pub fn dumpItemSet(item_set: ItemSet, g: *const Grammar) void {
-        var it = item_set.iterator();
-        std.debug.print("{{[", .{});
+    /// Merge the lookaheads of another item set with those in this item set.
+    /// Both item sets are expected to have the same items.
+    /// Returns whether any of the lookaheads in this item set were changed.
+    pub fn mergeLookaheads(self: *ItemSet, other: ItemSet, g: *const Grammar) bool {
+        std.debug.assert(self.items.items.len == other.items.items.len);
 
-        var first = true;
-        while (it.next()) |entry| {
-            if (first) {
-                first = false;
-            } else {
-                std.debug.print("]\n [", .{});
+        var changed = false;
+
+        for (self.items.items) |*item, i| {
+            if (item.lookahead.merge(other.items.items[i].lookahead, g))
+                changed = true;
+        }
+
+        return changed;
+    }
+
+    /// Order the items according to Item.order.
+    /// Note: the item set should only contain unique items.
+    pub fn sort(self: *ItemSet) void {
+        const lessThan = struct {
+            fn lessThan(ctx: void, lhs: Item, rhs: Item) bool {
+                _ = ctx;
+                return Item.order(lhs, rhs) == .lt;
             }
-            std.debug.print("{}, {}", .{ entry.key_ptr.fmt(g), entry.value_ptr.fmt(g) });
+        }.lessThan;
+
+        std.sort.sort(Item, self.items.items, {}, lessThan);
+    }
+
+    pub fn dump(self: ItemSet, g: *const Grammar) void {
+        std.debug.print("{{", .{});
+
+        for (self.items.items) |item, i| {
+            if (i != 0) {
+                std.debug.print("\n ", .{});
+            }
+
+            std.debug.print("{}", .{ item.fmt(g) });
         }
 
         std.debug.print("]}}\n", .{});
-}
-
-pub fn fmtItemSet(item_set: ItemSet, g: *const Grammar) ItemFormatter {
-    return ItemFormatter{ .item = item_set, .g = g };
-}
-
-const ItemSetHashContext = struct {
-    fn hash(self: ItemSetHashContext, item_set: ItemSet) u64 {
-        _ = self;
-        const item_hasher = comptime std.hash_map.getAutoHashFn(Config);
-
-        // Item sets are hash maps themselves, and so must be hashed in an order independent way.
-        var value: u64 = 0;
-
-        var it = item_set.iterator();
-        while (it.next()) |entry| {
-            value ^= item_hasher(entry.key_ptr.*);
-        }
-
-        return value;
-    }
-
-    fn eql(self: ItemSetHashContext, lhs: ItemSet, rhs: ItemSet) u64 {
-        _ = self;
-
-        if (lhs.count() != rhs.count())
-            return false;
-
-        {
-            var it = lhs.iterator();
-            while (it.next()) |entry| {
-                if (!rhs.contains(entry.key_ptr.*))
-                    return false;
-            }
-        }
-
-        {
-            var it = rhs.iterator();
-            while (it.next()) |entry| {
-                if (!lhs.contains(entry.key_ptr.*))
-                    return false;
-            }
-        }
-
-        return true;
     }
 };

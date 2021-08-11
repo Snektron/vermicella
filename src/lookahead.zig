@@ -7,6 +7,32 @@ pub const Lookahead = union(enum) {
     eof,
     terminal: Grammar.Terminal,
 
+    /// Return the lookahead associated to a particular index
+    /// indices are valid 0 .. totalIndices(g).
+    pub fn fromIndex(index: usize) Lookahead {
+        return switch (index) {
+            0 => .eof,
+            else => .{.terminal = index - 1},
+        };
+    }
+
+    /// Return a unique index representing this lookahead.
+    /// This forms a value 0 .. totalIndices(g)
+    pub fn toIndex(self: Lookahead) usize {
+        // Allocate index 0 to eof so that we do not have to know the total number of
+        // terminals here.
+        return switch (self) {
+            .eof => 0,
+            .terminal => |t| t + 1,
+        };
+    }
+
+    /// Return the total amount of indices which are valid for a particular grammar.
+    /// All indices 0 .. totalIndices(g) are valid.
+    pub fn totalIndices(g: *const Grammar) usize {
+        return g.terminals.len + 1; // Add one for eof
+    }
+
     pub fn fmt(self: Lookahead, g: *const Grammar) LookaheadFormatter {
         return LookaheadFormatter{
             .lookahead = self,
@@ -64,14 +90,9 @@ pub const LookaheadSet = struct {
         return LookaheadSet{.masks = masks.ptr};
     }
 
-    /// Return the total amount of bits in the memory backing this lookahead set.
-    fn requiredBits(g: *const Grammar) usize {
-        return g.terminals.len + 1; // Add one for eof
-    }
-
     /// Return the total amount of masks in the memory backing this lookahead set.
     fn requiredMasks(g: *const Grammar) usize {
-        return (requiredBits(g) + @bitSizeOf(MaskInt) - 1) / @bitSizeOf(MaskInt);
+        return (Lookahead.totalIndices(g) + @bitSizeOf(MaskInt) - 1) / @bitSizeOf(MaskInt);
     }
 
     /// Return the index in the bitset of a particular lookahead item.
@@ -107,19 +128,19 @@ pub const LookaheadSet = struct {
         return LookaheadSetIterator{
             .masks = self.masks,
             .bit = 0,
-            .total = requiredBits(g),
+            .total = Lookahead.totalIndices(g),
         };
     }
 
     /// Insert `lookahead` into the set.
     pub fn insert(self: *LookaheadSet, lookahead: Lookahead) void {
-        const bit = lookaheadToBit(lookahead);
+        const bit = lookahead.toIndex();
         self.masks[maskIndex(bit)] |= @as(MaskInt, 1) << maskOffset(bit);
     }
 
     /// Remove `lookahead` from the set.
     pub fn remove(self: *LookaheadSet, lookahead: Lookahead) void {
-        const bit = lookaheadToBit(lookahead);
+        const bit = lookahead.toIndex();
         self.masks[maskIndex(bit)] &= ~(@as(MaskInt, 1) << maskOffset(bit));
     }
 
@@ -178,15 +199,13 @@ const LookaheadSetIterator = struct {
             // TODO: Use ctz-based solution.
             const current = self.masks[LookaheadSet.maskIndex(self.bit)];
             var i = @as(usize, LookaheadSet.maskOffset(self.bit));
-            while (self.bit < self.total and i < @bitSizeOf(LookaheadSet.MaskInt)) {
-                self.bit += 1;
+            while (self.bit < self.total and i < @bitSizeOf(LookaheadSet.MaskInt)) : (i += 1) {
+                defer self.bit += 1;
 
                 // Bit set, return that bit
                 if ((current >> @intCast(LookaheadSet.ShiftInt, i)) & 1 != 0) {
-                    return LookaheadSet.bitToLookahead(self.bit - 1);
+                    return Lookahead.fromIndex(self.bit);
                 }
-
-                i += 1;
             }
 
             // No bit found in the current word. We should be at a boundary now (unless we reached the end).

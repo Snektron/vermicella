@@ -25,3 +25,7 @@ test "main" {
 
     try generator.generate();
 }
+
+test "" {
+    _ = @import("convergent_process.zig");
+}
