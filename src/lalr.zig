@@ -7,6 +7,7 @@ const Nonterminal = Grammar.Nonterminal;
 const Production = Grammar.Production;
 
 const FirstSets = @import("FirstSets.zig");
+const Lookahead = @import("lookahead.zig").Lookahead;
 const LookaheadSet = @import("lookahead.zig").LookaheadSet;
 const Item = @import("item.zig").Item;
 const ItemSet = @import("item.zig").ItemSet;
@@ -133,7 +134,7 @@ pub const Generator = struct {
         return result;
     }
 
-    pub fn generate(self: *Generator) !void {
+    fn buildFamily(self: *Generator) ![]ItemSet {
         var process = ConvergentProcess(ItemSet, ItemSet.HashContext).init(self.allocator(), .{});
         _ = try process.enqueue(try self.initialItemSet());
 
@@ -165,10 +166,22 @@ pub const Generator = struct {
             }
         }
 
-        for (process.items()) |item_set, i| {
+        return process.items();
+    }
+
+    pub fn generate(self: *Generator) !ParseTable {
+        const family = try self.buildFamily();
+
+        for (family) |item_set, i| {
             std.debug.print("i{}:\n", .{i});
             item_set.dump(true, self.g);
         }
+
+        // Allocate this using the original allocator so that it is not bound to this generator's lifetime.
+        var parse_table = try ParseTable.init(self.arena.child_allocator, self.g, family.len);
+        errdefer parse_table.deinit(self.arena.child_allocator);
+
+        return parse_table;
     }
 
     pub fn allocator(self: *Generator) *Allocator {
@@ -181,14 +194,42 @@ pub const ParseTable = struct {
     /// Maps states and lookaheads (NOT terminals) to an action to perform.
     /// Stored as 2D table, `total_states` by `Lookahead.totalIndices(g)` elements
     /// for associated grammar `g`.
-    actions: []const Action,
+    actions: []Action,
 
     /// The parser's goto table.
     /// Maps states and nonterminals to other states.
     /// Stored as 2D table, `total_states` by `g.nonterminals.len` elements for
     /// associated grammar `g`.
-    goto: []const usize,
+    gotos: []?usize,
 
     /// The total number of states in this parse table.
-    total_states: usize,
+    states: usize,
+
+    fn init(allocator: *Allocator, g: *const Grammar, states: usize) !ParseTable {
+        const actions = try allocator.alloc(Action, Lookahead.totalIndices(g) * states);
+        const gotos = try allocator.alloc(?usize, g.nonterminals.len * states);
+
+        std.mem.set(Action, actions, .err);
+        std.mem.set(?usize, gotos, null);
+
+        return ParseTable{
+            .actions = actions,
+            .gotos = gotos,
+            .states = states,
+        };
+    }
+
+    fn gotoIndex(g: *const Grammar, state: usize, nt: Nonterminal) usize {
+        return g.nonterminals.len * state + nt;
+    }
+
+    fn actionIndex(g: *const Grammar, state: usize, lookahead: Lookahead) usize {
+        return Lookahead.totalIndices(g) * state + lookahead.toIndex();
+    }
+
+    pub fn deinit(self: *ParseTable, allocator: *Allocator) void {
+        allocator.free(self.actions);
+        allocator.free(self.gotos);
+        self.* = undefined;
+    }
 };

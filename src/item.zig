@@ -97,12 +97,12 @@ pub const Item = struct {
 
     pub const HashContext = struct {
         /// Note: only the production and dot participate in the hash.
-        pub fn hash(self: HashContext, item: Item) u64 {
+        pub fn hash(self: HashContext, item: Item) u32 {
             _ = self;
             var hasher = std.hash.Wyhash.init(0);
             hasher.update(std.mem.asBytes(&item.production));
             hasher.update(std.mem.asBytes(&item.dot));
-            return hasher.final();
+            return @truncate(u32, hasher.final());
         }
 
         pub fn eql(self: HashContext, lhs: Item, rhs: Item) bool {
@@ -199,7 +199,7 @@ pub const ItemSet = struct {
     }
 
     pub const HashContext = struct {
-        pub fn hash(self: HashContext, item_set: ItemSet) u64 {
+        pub fn hash(self: HashContext, item_set: ItemSet) u32 {
             _ = self;
             var hasher = std.hash.Wyhash.init(0);
 
@@ -209,7 +209,7 @@ pub const ItemSet = struct {
                 hasher.update(std.mem.asBytes(&item_hash));
             }
 
-            return hasher.final();
+            return @truncate(u32, hasher.final());
         }
 
         pub fn eql(self: HashContext, lhs: ItemSet, rhs: ItemSet) bool {

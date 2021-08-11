@@ -13,37 +13,27 @@ pub fn ConvergentProcess(
     return struct {
         const Self = @This();
 
-        /// An storing per-element properties
-        elements: std.MultiArrayList(struct {
-            /// The item.
-            item: T,
-            /// Is the item currently queued for processing?
-            in_queue: bool,
-        }),
-
-        /// A hash map containing indices of items we have already seen. Can also
-        /// be used to quickly fetch the index of a particular item.
-        indices: std.HashMapUnmanaged(usize, void, IndexContext, std.hash_map.default_max_load_percentage),
+        /// A map of items and whether they are currently in a queue.
+        item_map: std.ArrayHashMapUnmanaged(T, bool, Context, true),
 
         /// The queue of indices of items that are to be processed.
         /// Note: there is currently no unmanaged fifo, but we simply steal the allocator from this
         /// type when required.
         queue: std.fifo.LinearFifo(usize, .Dynamic),
 
+        /// The hash map context
         ctx: Context,
 
         pub fn init(@"🐊": *Allocator, ctx: Context) Self {
             return .{
-                .elements = .{},
-                .indices = .{},
+                .item_map = .{},
                 .queue = std.fifo.LinearFifo(usize, .Dynamic).init(@"🐊"),
                 .ctx = ctx,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.elements.deinit(self.allocator());
-            self.indices.deinit(self.allocator());
+            self.item_map.deinit(self.allocator());
             self.queue.deinit();
             self.* = undefined;
         }
@@ -54,24 +44,20 @@ pub fn ConvergentProcess(
 
         /// Return the total number of elements seen, queued and already processed.
         pub fn count(self: Self) usize {
-            return self.elements.len;
+            return self.item_map.count();
         }
 
         /// Return the items seen in this process, both queued and processed.
         /// Note: Do not modify these in such a way that the item's hash becomes
         /// invalid!!
         pub fn items(self: Self) []T {
-            return self.elements.items(.item);
+            return self.item_map.keys();
         }
 
         /// Return the index in the `elements` array of a particular item.
         /// Returns null if the item has not been inserted before.
         pub fn indexOf(self: Self, item: T) ?usize {
-            const maybe_entry = self.indices.getEntryAdapted(item, ByItemContext.init(self));
-            return if (maybe_entry) |entry|
-                entry.key_ptr.*
-            else
-                null;
+            return self.item_map.getIndexContext(item, self.ctx);
         }
 
         /// Return the next item to process, and dequeue it.
@@ -82,7 +68,7 @@ pub fn ConvergentProcess(
         /// Return the index of the next item to process, and dequeue it.
         pub fn nextIndex(self: *Self) ?usize {
             if (self.queue.readItem()) |index| {
-                self.elements.items(.in_queue)[index] = false;
+                self.item_map.values()[index] = false;
                 return index;
             }
 
@@ -91,7 +77,7 @@ pub fn ConvergentProcess(
 
         /// Re-queue an already existing item.
         pub fn requeue(self: *Self, index: usize) !void {
-            var in_queue = self.elements.items(.in_queue);
+            const in_queue = self.item_map.values();
             if (!in_queue[index]) {
                 in_queue[index] = true;
                 try self.queue.writeItem(index);
@@ -110,95 +96,35 @@ pub fn ConvergentProcess(
         /// it is queued again. If the item already exists and is queued, nothing happens. In both
         /// of these cases, the original item remains.
         pub fn enqueue(self: *Self, item: T) !EnqueueResult {
-            var index_ctx = IndexContext.init(self.*);
-            var item_ctx = ByItemContext.init(self.*);
-
-            const result = try self.indices.getOrPutContextAdapted(
+            const result = try self.item_map.getOrPutContext(
                 self.allocator(),
                 item,
-                item_ctx,
-                index_ctx,
+                self.ctx,
             );
 
-            var in_queue = self.elements.items(.in_queue);
-
             if (result.found_existing) {
-                const index = result.key_ptr.*;
-
-                if (!in_queue[index]) {
+                if (!result.value_ptr.*) {
                     // Not queued, re-queue.
-                    in_queue[index] = true;
-                    try self.queue.writeItem(index);
+                    result.value_ptr.* = true;
+                    try self.queue.writeItem(result.index);
                 }
-
-                return EnqueueResult{
-                    .found_existing = true,
-                    .index = index,
-                };
             } else {
-                const index = self.count();
-                result.key_ptr.* = index;
-                try self.elements.append(self.allocator(), .{.item = item, .in_queue = true});
-                try self.queue.writeItem(index);
-
-                return EnqueueResult{
-                    .found_existing = false,
-                    .index = index,
-                };
+                result.value_ptr.* = true;
+                try self.queue.writeItem(result.index);
             }
+
+            return EnqueueResult{
+                .found_existing = result.found_existing,
+                .index = result.index,
+            };
         }
-
-        // A context solely used for re-hashing during growing a hash set.
-        const IndexContext = struct {
-            items: []const T,
-            ctx: Context,
-
-            fn init(p: Self) IndexContext {
-                return .{
-                    .items = p.elements.items(.item),
-                    .ctx = p.ctx,
-                };
-            }
-
-            pub fn hash(self: IndexContext, index: usize) u64 {
-                return self.ctx.hash(self.items[index]);
-            }
-
-            pub fn eql(self: IndexContext, lhs: usize, rhs: usize) bool {
-                _ = self;
-                _ = lhs;
-                _ = rhs;
-                unreachable;
-            }
-        };
-
-        /// The context type used to query the `indices` set.
-        const ByItemContext = struct {
-            items: []const T,
-            ctx: Context,
-
-            fn init(p: Self) ByItemContext {
-                return .{
-                    .items = p.elements.items(.item),
-                    .ctx = p.ctx,
-                };
-            }
-
-            pub fn hash(self: ByItemContext, item: T) u64 {
-                return self.ctx.hash(item);
-            }
-
-            pub fn eql(self: ByItemContext, lhs: T, rhs: usize) bool {
-                return self.ctx.eql(lhs, self.items[rhs]);
-            }
-        };
     };
 }
 
 test "" {
     const P = ConvergentProcess(
         usize,
-        std.hash_map.AutoContext(usize)
+        std.array_hash_map.AutoContext(usize)
     );
 
     var p = P.init(std.testing.allocator, .{});
