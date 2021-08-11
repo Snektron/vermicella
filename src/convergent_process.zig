@@ -89,6 +89,15 @@ pub fn ConvergentProcess(
             return null;
         }
 
+        /// Re-queue an already existing item.
+        pub fn requeue(self: *Self, index: usize) !void {
+            var in_queue = self.elements.items(.in_queue);
+            if (!in_queue[index]) {
+                in_queue[index] = true;
+                try self.queue.writeItem(index);
+            }
+        }
+
         const EnqueueResult = struct {
             /// The enqueued item was already in the items array.
             found_existing: bool,

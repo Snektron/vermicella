@@ -78,10 +78,10 @@ pub const Generator = struct {
                     // The item already exists, merge the lookaheads.
                     const changed = process.items()[index].lookahead.merge(tmp, self.g);
                     if (changed) {
-                        // We're sure that the item already exists here,
-                        // and so we retain ownership of tmp.
-                        _ = try process.enqueue(new_item);
+                        try process.requeue(index);
                     }
+                    // Note: we've never actually transferred ownership of `tmp` in this branch, so
+                    // we don't need to allocate a new `tmp`.
                 } else {
                     // Item does not exist yet, enqueue new.
                     _ = try process.enqueue(new_item);
@@ -100,17 +100,13 @@ pub const Generator = struct {
     fn successor(self: *Generator, item_set: ItemSet, sym: Symbol) !ItemSet {
         var result = ItemSet{};
 
-        var it = item_set.items.iterator();
-        while (it.next()) |entry| {
-            const sym_at_dot = entry.key_ptr.symAtDot() orelse continue;
+        for (item_set.items.items) |item| {
+            const sym_at_dot = item.symAtDot() orelse continue;
             if (!std.meta.eql(sym_at_dot, sym))
                 continue;
 
-            const item = entry.key_ptr.shift().?;
-            const lookahead = try entry.value_ptr.clone(self.allocator(), self.g);
-
-            // Entries in the original item set are unique, so these are to.
-            try result.putNoClobber(self.allocator(), item, lookahead);
+            const new_item = (try item.shift(self.allocator(), self.g)).?;
+            try result.items.append(self.allocator(), new_item);
         }
 
         // Note: closure sorts for us.
@@ -119,12 +115,30 @@ pub const Generator = struct {
     }
 
     pub fn generate(self: *Generator) !void {
-        var initial = try self.initialItemSet();
-        initial.dump(self.g);
+        var process = ConvergentProcess(ItemSet, ItemSet.HashContext).init(self.allocator(), .{});
+        _ = try process.enqueue(try self.initialItemSet());
 
-        const changed = initial.mergeLookaheads(initial, self.g);
-        std.debug.print("Changed: {}\n", .{ changed });
-        initial.dump(self.g);
+        while (process.next()) |item_set| {
+            item_set.dump(self.g);
+
+            // TODO: Maybe a more efficient way to iterate over all symbols in an item set?
+            for (item_set.items.items) |item| {
+                const sym = item.symAtDot() orelse continue;
+
+                const succ = try self.successor(item_set, sym);
+                if (process.indexOf(succ)) |index| {
+                    // Found an existing item set, try to merge per LALR.
+                    const changed = process.items()[index].mergeLookaheads(succ, self.g);
+
+                    // Re-queue to account for the changed item set.
+                    if (changed)
+                        try process.requeue(index);
+                } else {
+                    // This is a new item set
+                    _ = try process.enqueue(succ);
+                }
+            }
+        }
     }
 
     pub fn allocator(self: *Generator) *Allocator {

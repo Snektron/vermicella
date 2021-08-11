@@ -32,11 +32,15 @@ pub const Item = struct {
 
     /// Shift the dot over to the next symbol. If the dot was currently at the end, this function
     /// returns `null`.
-    pub fn shift(self: Item) ?Item {
+    pub fn shift(self: Item, allocator: *std.mem.Allocator, g: *const Grammar) !?Item {
         return if (self.isDotAtEnd())
             null
         else
-            Item{.production = self.production, .dot = self.dot + 1};
+            Item{
+                .production = self.production,
+                .dot = self.dot + 1,
+                .lookahead = try self.lookahead.clone(allocator, g),
+            };
     }
 
     pub fn symAtDot(self: Item) ?Symbol {
@@ -118,6 +122,7 @@ const ItemFormatter = struct {
 
 pub const ItemSet = struct {
     /// The items in this set. Should be ordered, and no duplicates should exist.
+    /// TODO: Replace with MultiArrayList.
     items: std.ArrayListUnmanaged(Item) = .{},
 
     /// Merge the lookaheads of another item set with those in this item set.
@@ -129,6 +134,7 @@ pub const ItemSet = struct {
         var changed = false;
 
         for (self.items.items) |*item, i| {
+            std.debug.assert(item.order(other.items.items[i]) == .eq);
             if (item.lookahead.merge(other.items.items[i].lookahead, g))
                 changed = true;
         }
@@ -160,6 +166,34 @@ pub const ItemSet = struct {
             std.debug.print("{}", .{ item.fmt(g) });
         }
 
-        std.debug.print("]}}\n", .{});
+        std.debug.print("}}\n", .{});
     }
+
+    pub const HashContext = struct {
+        pub fn hash(self: HashContext, item_set: ItemSet) u64 {
+            _ = self;
+            var hasher = std.hash.Wyhash.init(0);
+
+            // Items are supposed to be in a sorted order so this hash is stable.
+            for (item_set.items.items) |item| {
+                const item_hash = (Item.HashContext{}).hash(item);
+                hasher.update(std.mem.asBytes(&item_hash));
+            }
+
+            return hasher.final();
+        }
+
+        pub fn eql(self: HashContext, lhs: ItemSet, rhs: ItemSet) bool {
+            _ = self;
+            if (lhs.items.items.len != rhs.items.items.len)
+                return false;
+
+            for (lhs.items.items) |item, i| {
+                if (item.order(rhs.items.items[i]) != .eq)
+                    return false;
+            }
+
+            return true;
+        }
+    };
 };
