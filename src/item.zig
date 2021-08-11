@@ -4,6 +4,15 @@ const Symbol = Grammar.Symbol;
 const Production = Grammar.Production;
 const Nonterminal = Grammar.Nonterminal;
 const LookaheadSet = @import("lookahead.zig").LookaheadSet;
+const State = @import("lalr.zig").State;
+
+/// Similar to lalr.Action, except that we don't need to store the
+/// production (it will always be equal to the item's production).
+const Action = union(enum) {
+    shift: usize,
+    reduce,
+    accept,
+};
 
 pub const Item = struct {
     /// Index of the associated production in the grammar's `productions` slice.
@@ -16,12 +25,18 @@ pub const Item = struct {
     /// The lookahead corresponding to this item.
     lookahead: LookaheadSet,
 
+    /// The action associated to this item.
+    /// Note: this will be unused for much of the generation process, and so
+    /// is usually undefined.
+    action: Action,
+
     /// Initialize an item, with the dot at the start.
     pub fn init(production: *const Production, lookahead: LookaheadSet) Item {
         return .{
             .production = production,
             .dot = 0,
             .lookahead = lookahead,
+            .action = undefined,
         };
     }
 
@@ -40,6 +55,7 @@ pub const Item = struct {
                 .production = self.production,
                 .dot = self.dot + 1,
                 .lookahead = try self.lookahead.clone(allocator, g),
+                .action = undefined,
             };
     }
 
@@ -102,7 +118,6 @@ const ItemFormatter = struct {
 
     pub fn format(self: ItemFormatter, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = options;
-        _ = fmt;
 
         const production = self.item.production;
         try writer.print("[{s} ->", .{ self.g.nonterminals[production.lhs].name });
@@ -116,7 +131,17 @@ const ItemFormatter = struct {
             try writer.writeAll(" •");
         }
 
-        try writer.print(", {}]", .{ self.item.lookahead.fmt(self.g) });
+        try writer.print(", {}", .{ self.item.lookahead.fmt(self.g) });
+
+        if (std.mem.eql(u8, fmt, "a")) {
+            switch (self.item.action) {
+                .shift => |target| try writer.print(", shift {}", .{target}),
+                .reduce => try writer.writeAll(", reduce"),
+                .accept => try writer.writeAll(", accept"),
+            }
+        }
+
+        try writer.writeByte(']');
     }
 };
 
@@ -155,7 +180,7 @@ pub const ItemSet = struct {
         std.sort.sort(Item, self.items.items, {}, lessThan);
     }
 
-    pub fn dump(self: ItemSet, g: *const Grammar) void {
+    pub fn dump(self: ItemSet, dump_actions: bool, g: *const Grammar) void {
         std.debug.print("{{", .{});
 
         for (self.items.items) |item, i| {
@@ -163,7 +188,11 @@ pub const ItemSet = struct {
                 std.debug.print("\n ", .{});
             }
 
-            std.debug.print("{}", .{ item.fmt(g) });
+            if (dump_actions) {
+                std.debug.print("{a}", .{item.fmt(g)});
+            } else {
+                std.debug.print("{}", .{item.fmt(g)});
+            }
         }
 
         std.debug.print("}}\n", .{});

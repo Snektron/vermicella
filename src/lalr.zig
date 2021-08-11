@@ -13,6 +13,25 @@ const ItemSet = @import("item.zig").ItemSet;
 
 const ConvergentProcess = @import("convergent_process.zig").ConvergentProcess;
 
+/// An index representing a particular state in the final state machine.
+pub const State = usize;
+
+/// Actions that a LALR parser performs during parsing.
+pub const Action = union(enum) {
+    /// Push this state on the stack.
+    shift: State,
+
+    /// Perform a reduction, popping the top states and producing the LHS
+    /// of the production.
+    reduce: *const Production,
+
+    /// Accept the input, and perform a final reduction.
+    accept: *const Production,
+
+    /// Produce an error.
+    err,
+};
+
 pub const Generator = struct {
     g: *const Grammar,
     arena: std.heap.ArenaAllocator,
@@ -119,11 +138,15 @@ pub const Generator = struct {
         _ = try process.enqueue(try self.initialItemSet());
 
         while (process.next()) |item_set| {
-            item_set.dump(self.g);
+            for (item_set.items.items) |*item| {
+                const sym = item.symAtDot() orelse {
+                    item.action = if (item.production.lhs == Grammar.start_nonterminal)
+                        .accept
+                    else
+                        .reduce;
 
-            // TODO: Maybe a more efficient way to iterate over all symbols in an item set?
-            for (item_set.items.items) |item| {
-                const sym = item.symAtDot() orelse continue;
+                    continue;
+                };
 
                 const succ = try self.successor(item_set, sym);
                 if (process.indexOf(succ)) |index| {
@@ -133,11 +156,18 @@ pub const Generator = struct {
                     // Re-queue to account for the changed item set.
                     if (changed)
                         try process.requeue(index);
+                    item.action = .{.shift = index};
                 } else {
                     // This is a new item set
-                    _ = try process.enqueue(succ);
+                    const result = try process.enqueue(succ);
+                    item.action = .{.shift = result.index};
                 }
             }
+        }
+
+        for (process.items()) |item_set, i| {
+            std.debug.print("i{}:\n", .{i});
+            item_set.dump(true, self.g);
         }
     }
 
@@ -147,23 +177,6 @@ pub const Generator = struct {
 };
 
 pub const ParseTable = struct {
-    pub const State = usize;
-
-    pub const Action = union(enum) {
-        /// Push this state on the stack.
-        shift: State,
-
-        /// Perform a reduction, popping the top states and producing the LHS
-        /// of the production.
-        reduce: *const Production,
-
-        /// Accept the input, and perform a final reduction.
-        accept: *const Production,
-
-        /// Produce an error.
-        err: void,
-    };
-
     /// The parser's action table.
     /// Maps states and lookaheads (NOT terminals) to an action to perform.
     /// Stored as 2D table, `total_states` by `Lookahead.totalIndices(g)` elements

@@ -148,8 +148,7 @@ pub fn ConvergentProcess(
             }
         }
 
-        /// A dummy context for the indices hash map. This hash map should never be
-        /// require the default context, but still required one.
+        // A context solely used for re-hashing during growing a hash set.
         const IndexContext = struct {
             items: []const T,
             ctx: Context,
