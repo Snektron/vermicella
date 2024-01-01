@@ -24,7 +24,7 @@ pub fn ConvergentProcess(
         /// The hash map context
         ctx: Context,
 
-        pub fn init(@"🐊": *Allocator, ctx: Context) Self {
+        pub fn init(@"🐊": Allocator, ctx: Context) Self {
             return .{
                 .item_map = .{},
                 .queue = std.fifo.LinearFifo(usize, .Dynamic).init(@"🐊"),
@@ -38,7 +38,7 @@ pub fn ConvergentProcess(
             self.* = undefined;
         }
 
-        pub fn allocator(self: Self) *Allocator {
+        pub fn allocator(self: Self) Allocator {
             return self.queue.allocator;
         }
 
@@ -121,53 +121,50 @@ pub fn ConvergentProcess(
     };
 }
 
-test "" {
-    const P = ConvergentProcess(
-        usize,
-        std.array_hash_map.AutoContext(usize)
-    );
+test {
+    const P = ConvergentProcess(usize, std.array_hash_map.AutoContext(usize));
 
     var p = P.init(std.testing.allocator, .{});
     defer p.deinit();
 
     try std.testing.expectEqual(
-        P.EnqueueResult{.found_existing = false, .index = 0},
-        try p.enqueue(10)
+        P.EnqueueResult{ .found_existing = false, .index = 0 },
+        try p.enqueue(10),
     );
 
     try std.testing.expectEqual(
-        P.EnqueueResult{.found_existing = false, .index = 1},
-        try p.enqueue(20)
+        P.EnqueueResult{ .found_existing = false, .index = 1 },
+        try p.enqueue(20),
     );
 
     try std.testing.expectEqual(
-        P.EnqueueResult{.found_existing = false, .index = 2},
-        try p.enqueue(30)
+        P.EnqueueResult{ .found_existing = false, .index = 2 },
+        try p.enqueue(30),
     );
 
     try std.testing.expectEqual(
-        P.EnqueueResult{.found_existing = false, .index = 3},
-        try p.enqueue(40)
+        P.EnqueueResult{ .found_existing = false, .index = 3 },
+        try p.enqueue(40),
     );
 
     try std.testing.expectEqual(
-        P.EnqueueResult{.found_existing = true, .index = 1},
-        try p.enqueue(20)
+        P.EnqueueResult{ .found_existing = true, .index = 1 },
+        try p.enqueue(20),
     );
 
     try std.testing.expectEqual(@as(?usize, 10), p.next());
     try std.testing.expectEqual(@as(?usize, 20), p.next());
 
     try std.testing.expectEqual(
-        P.EnqueueResult{.found_existing = true, .index = 1},
-        try p.enqueue(20)
+        P.EnqueueResult{ .found_existing = true, .index = 1 },
+        try p.enqueue(20),
     );
 
     try std.testing.expectEqual(@as(?usize, 30), p.next());
 
     try std.testing.expectEqual(
-        P.EnqueueResult{.found_existing = true, .index = 0},
-        try p.enqueue(10)
+        P.EnqueueResult{ .found_existing = true, .index = 0 },
+        try p.enqueue(10),
     );
 
     try std.testing.expectEqual(@as(?usize, 40), p.next());

@@ -47,7 +47,7 @@ pub const Item = struct {
 
     /// Shift the dot over to the next symbol. If the dot was currently at the end, this function
     /// returns `null`.
-    pub fn shift(self: Item, allocator: *std.mem.Allocator, g: *const Grammar) !?Item {
+    pub fn shift(self: Item, allocator: std.mem.Allocator, g: *const Grammar) !?Item {
         return if (self.isDotAtEnd())
             null
         else
@@ -70,7 +70,7 @@ pub const Item = struct {
         return if (self.isDotAtEnd())
             &[_]Symbol{}
         else
-            self.production.rhs[self.dot ..];
+            self.production.rhs[self.dot..];
     }
 
     pub fn nonterminalAtDot(self: Item) ?Nonterminal {
@@ -82,13 +82,16 @@ pub const Item = struct {
     }
 
     fn fmt(self: Item, g: *const Grammar) ItemFormatter {
-        return ItemFormatter{ .item = self, .g = g, };
+        return ItemFormatter{
+            .item = self,
+            .g = g,
+        };
     }
 
     /// Order item sets.
     /// Note: only the production and dot participate in order checks.
     pub fn order(lhs: Item, rhs: Item) std.math.Order {
-        const production_cmp = std.math.order(@ptrToInt(lhs.production), @ptrToInt(rhs.production));
+        const production_cmp = std.math.order(@intFromPtr(lhs.production), @intFromPtr(rhs.production));
         if (production_cmp != .eq)
             return production_cmp;
 
@@ -102,10 +105,10 @@ pub const Item = struct {
             var hasher = std.hash.Wyhash.init(0);
             hasher.update(std.mem.asBytes(&item.production));
             hasher.update(std.mem.asBytes(&item.dot));
-            return @truncate(u32, hasher.final());
+            return @truncate(hasher.final());
         }
 
-        pub fn eql(self: HashContext, lhs: Item, rhs: Item) bool {
+        pub fn eql(self: HashContext, lhs: Item, rhs: Item, _: usize) bool {
             _ = self;
             return order(lhs, rhs) == .eq;
         }
@@ -120,18 +123,18 @@ const ItemFormatter = struct {
         _ = options;
 
         const production = self.item.production;
-        try writer.print("[{s} ->", .{ self.g.nonterminals[production.lhs].name });
-        for (production.rhs) |sym, i| {
+        try writer.print("[{s} ->", .{self.g.nonterminals[production.lhs].name});
+        for (production.rhs, 0..) |sym, i| {
             if (self.item.dot == i)
                 try writer.writeAll(" •");
-            try writer.print(" {q}", .{ sym.fmt(self.g) });
+            try writer.print(" {q}", .{sym.fmt(self.g)});
         }
 
         if (self.item.dot == production.rhs.len) {
             try writer.writeAll(" •");
         }
 
-        try writer.print(", {}", .{ self.item.lookahead.fmt(self.g) });
+        try writer.print(", {}", .{self.item.lookahead.fmt(self.g)});
 
         if (std.mem.eql(u8, fmt, "a")) {
             switch (self.item.action) {
@@ -158,7 +161,7 @@ pub const ItemSet = struct {
 
         var changed = false;
 
-        for (self.items.items) |*item, i| {
+        for (self.items.items, 0..) |*item, i| {
             std.debug.assert(item.order(other.items.items[i]) == .eq);
             if (item.lookahead.merge(other.items.items[i].lookahead, g))
                 changed = true;
@@ -177,13 +180,13 @@ pub const ItemSet = struct {
             }
         }.lessThan;
 
-        std.sort.sort(Item, self.items.items, {}, lessThan);
+        std.mem.sort(Item, self.items.items, {}, lessThan);
     }
 
     pub fn dump(self: ItemSet, dump_actions: bool, g: *const Grammar) void {
         std.debug.print("{{", .{});
 
-        for (self.items.items) |item, i| {
+        for (self.items.items, 0..) |item, i| {
             if (i != 0) {
                 std.debug.print("\n ", .{});
             }
@@ -209,15 +212,15 @@ pub const ItemSet = struct {
                 hasher.update(std.mem.asBytes(&item_hash));
             }
 
-            return @truncate(u32, hasher.final());
+            return @truncate(hasher.final());
         }
 
-        pub fn eql(self: HashContext, lhs: ItemSet, rhs: ItemSet) bool {
+        pub fn eql(self: HashContext, lhs: ItemSet, rhs: ItemSet, _: usize) bool {
             _ = self;
             if (lhs.items.items.len != rhs.items.items.len)
                 return false;
 
-            for (lhs.items.items) |item, i| {
+            for (lhs.items.items, 0..) |item, i| {
                 if (item.order(rhs.items.items[i]) != .eq)
                     return false;
             }

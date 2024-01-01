@@ -1,14 +1,23 @@
 const Builder = @import("std").build.Builder;
 
 pub fn build(b: *Builder) void {
-    const mode = b.standardReleaseOptions();
-    const lib = b.addStaticLibrary("vermicella", "src/main.zig");
-    lib.setBuildMode(mode);
-    lib.install();
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
 
-    var main_tests = b.addTest("src/main.zig");
-    main_tests.setBuildMode(mode);
+    const lib = b.addStaticLibrary(.{
+        .name = "vermicella",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(lib);
 
-    const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&main_tests.step);
+    const main_tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    const run_main_tests = b.addRunArtifact(main_tests);
+    run_main_tests.has_side_effects = true;
+    b.step("test", "Run unit tests").dependOn(&run_main_tests.step);
 }
