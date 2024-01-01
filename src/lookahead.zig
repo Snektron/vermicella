@@ -12,7 +12,7 @@ pub const Lookahead = union(enum) {
     pub fn fromIndex(index: usize) Lookahead {
         return switch (index) {
             0 => .eof,
-            else => .{.terminal = index - 1},
+            else => .{ .terminal = index - 1 },
         };
     }
 
@@ -72,22 +72,22 @@ pub const LookaheadSet = struct {
     masks: [*]MaskInt,
 
     /// Initialize a lookahead set.
-    pub fn init(allocator: *Allocator, g: *const Grammar) !LookaheadSet {
+    pub fn init(allocator: Allocator, g: *const Grammar) !LookaheadSet {
         const masks = try allocator.alloc(MaskInt, requiredMasks(g));
-        std.mem.set(MaskInt, masks, 0);
-        return LookaheadSet{.masks = masks.ptr};
+        @memset(masks, 0);
+        return LookaheadSet{ .masks = masks.ptr };
     }
 
     /// Deinitialize this set, freeing all internal memory.
-    pub fn deinit(self: *LookaheadSet, allocator: *Allocator, g: *const Grammar) void {
-        allocator.free(self.masks[0 .. requiredMasks(g)]);
+    pub fn deinit(self: *LookaheadSet, allocator: Allocator, g: *const Grammar) void {
+        allocator.free(self.masks[0..requiredMasks(g)]);
         self.* = undefined;
     }
 
-    pub fn clone(self: LookaheadSet, allocator: *Allocator, g: *const Grammar) !LookaheadSet {
+    pub fn clone(self: LookaheadSet, allocator: Allocator, g: *const Grammar) !LookaheadSet {
         const masks = try allocator.alloc(MaskInt, requiredMasks(g));
-        std.mem.copy(MaskInt, masks, self.masks[0 .. requiredMasks(g)]);
-        return LookaheadSet{.masks = masks.ptr};
+        @memcpy(masks, self.masks[0..requiredMasks(g)]);
+        return LookaheadSet{ .masks = masks.ptr };
     }
 
     /// Return the total amount of masks in the memory backing this lookahead set.
@@ -109,7 +109,7 @@ pub const LookaheadSet = struct {
     fn bitToLookahead(bit: usize) Lookahead {
         return switch (bit) {
             0 => .eof,
-            else => .{.terminal = bit - 1},
+            else => .{ .terminal = bit - 1 },
         };
     }
 
@@ -120,7 +120,7 @@ pub const LookaheadSet = struct {
 
     /// Return the bit offset in the word backing the bit.
     fn maskOffset(bit: usize) ShiftInt {
-        return @intCast(ShiftInt, bit % @bitSizeOf(MaskInt));
+        return @intCast(bit % @bitSizeOf(MaskInt));
     }
 
     /// Iterate over all lookaheads in this set.
@@ -153,7 +153,7 @@ pub const LookaheadSet = struct {
     /// Merge the elements from the other set into this set. Returns whether this set has changed.
     pub fn merge(self: *LookaheadSet, other: LookaheadSet, g: *const Grammar) bool {
         var changed = false;
-        for (self.masks[0 .. requiredMasks(g)]) |*mask, i| {
+        for (self.masks[0..requiredMasks(g)], 0..) |*mask, i| {
             if (mask.* | other.masks[i] != mask.*)
                 changed = true;
             mask.* |= other.masks[i];
@@ -164,11 +164,11 @@ pub const LookaheadSet = struct {
 
     // Remove all entries from this set.
     pub fn clear(self: LookaheadSet, g: *const Grammar) void {
-        std.mem.set(MaskInt, self.masks[0 .. requiredMasks(g)], 0);
+        @memset(self.masks[0..requiredMasks(g)], 0);
     }
 
     pub fn fmt(self: LookaheadSet, g: *const Grammar) LookaheadSetFormatter {
-        return LookaheadSetFormatter {
+        return LookaheadSetFormatter{
             .lookahead_set = self,
             .g = g,
         };
@@ -203,7 +203,7 @@ const LookaheadSetIterator = struct {
                 defer self.bit += 1;
 
                 // Bit set, return that bit
-                if ((current >> @intCast(LookaheadSet.ShiftInt, i)) & 1 != 0) {
+                if ((current >> @as(LookaheadSet.ShiftInt, @intCast(i))) & 1 != 0) {
                     return Lookahead.fromIndex(self.bit);
                 }
             }

@@ -17,14 +17,14 @@ pub fn init(arena: *std.heap.ArenaAllocator, g: *const Grammar) !Self {
     // Note: allocator is always going to be an arena allocator, so we don't need to
     // (err)defer here.
     var self = Self{
-        .base_sets = try arena.allocator.alloc(LookaheadSet, g.nonterminals.len),
+        .base_sets = try arena.allocator().alloc(LookaheadSet, g.nonterminals.len),
     };
 
     for (self.base_sets) |*set| {
-        set.* = try LookaheadSet.init(&arena.allocator, g);
+        set.* = try LookaheadSet.init(arena.allocator(), g);
     }
 
-    var tmp = try LookaheadSet.init(&arena.allocator, g);
+    var tmp = try LookaheadSet.init(arena.allocator(), g);
     var changed = true;
     while (changed) {
         changed = false;
@@ -50,7 +50,7 @@ fn baseFirst(self: Self, target: *LookaheadSet, syms: []const Symbol, g: *const 
             .terminal => |t| {
                 // If the production has a terminal, it will not derive epsilon, and so we
                 // can return now.
-                target.insert(.{.terminal = t});
+                target.insert(.{ .terminal = t });
                 return;
             },
             .nonterminal => |nt| {
@@ -89,7 +89,7 @@ pub fn first(self: *Self, target: *LookaheadSet, syms: []const Symbol, lookahead
 }
 
 pub fn dump(self: Self, g: *const Grammar) void {
-    for (self.base_sets) |lookahead_set, nt| {
+    for (self.base_sets, 0..) |lookahead_set, nt| {
         std.debug.print("{}: {}\n", .{ g.fmtNonterminal(nt), lookahead_set.fmt(g) });
     }
 }

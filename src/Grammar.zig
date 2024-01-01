@@ -34,15 +34,13 @@ pub fn productionsForNonterminal(self: Self, nt: Nonterminal) []const Production
     else
         self.nonterminals[nt + 1].first_production;
 
-    return self.productions[first_production .. last_production];
+    return self.productions[first_production..last_production];
 }
 
 /// Dump this grammar in a human-readable form.
 pub fn dump(self: Self) void {
-    _ = self;
-
     for (self.productions) |prod| {
-        std.debug.print("{t}\n", .{ prod.fmt(&self) });
+        std.debug.print("{t}\n", .{prod.fmt(&self)});
     }
 }
 
@@ -67,7 +65,7 @@ pub const Production = struct {
     tag: []const u8,
 
     pub fn fmt(self: *const Production, g: *const Self) ProductionFormatter {
-        return ProductionFormatter{.g = g, .prod = self};
+        return ProductionFormatter{ .g = g, .prod = self };
     }
 };
 
@@ -83,7 +81,7 @@ pub const Symbol = union(enum) {
     terminal: usize,
 
     pub fn fmt(self: Symbol, g: *const Self) SymbolFormatter {
-        return return SymbolFormatter{.g = g, .sym = self};
+        return SymbolFormatter{ .g = g, .sym = self };
     }
 };
 
@@ -98,9 +96,9 @@ const ProductionFormatter = struct {
             try writer.print("[{s}] ", .{self.prod.tag});
         }
 
-        try writer.print("{s} ->", .{ self.g.nonterminals[self.prod.lhs].name });
+        try writer.print("{s} ->", .{self.g.nonterminals[self.prod.lhs].name});
         for (self.prod.rhs) |sym| {
-            try writer.print(" {q}", .{ sym.fmt(self.g) });
+            try writer.print(" {q}", .{sym.fmt(self.g)});
         }
     }
 };
@@ -112,10 +110,10 @@ const SymbolFormatter = struct {
     pub fn format(self: SymbolFormatter, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = options;
         switch (self.sym) {
-            .nonterminal => |nt| try writer.print("{s}", .{ self.g.nonterminals[nt].name }),
+            .nonterminal => |nt| try writer.print("{s}", .{self.g.nonterminals[nt].name}),
             .terminal => |t| {
                 const tfmt: []const u8 = comptime if (std.mem.eql(u8, fmt, "s")) "'{s}'" else "{s}";
-                try writer.print(tfmt, .{ self.g.terminals[t] });
+                try writer.print(tfmt, .{self.g.terminals[t]});
             },
         }
     }
@@ -124,13 +122,13 @@ const SymbolFormatter = struct {
 pub fn fmtTerminal(self: *const Self, t: Terminal) SymbolFormatter {
     return SymbolFormatter{
         .g = self,
-        .sym = .{.terminal = t},
+        .sym = .{ .terminal = t },
     };
 }
 
 pub fn fmtNonterminal(self: *const Self, nt: Nonterminal) SymbolFormatter {
     return SymbolFormatter{
         .g = self,
-        .sym = .{.nonterminal = nt},
+        .sym = .{ .nonterminal = nt },
     };
 }

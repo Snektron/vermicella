@@ -38,7 +38,7 @@ pub const Generator = struct {
     arena: std.heap.ArenaAllocator,
     first_sets: FirstSets,
 
-    pub fn init(backing: *Allocator, g: *const Grammar) !Generator {
+    pub fn init(backing: Allocator, g: *const Grammar) !Generator {
         var self = Generator{
             .g = g,
             .arena = std.heap.ArenaAllocator.init(backing),
@@ -112,7 +112,7 @@ pub const Generator = struct {
         }
 
         try item_set.items.resize(self.allocator(), process.count());
-        std.mem.copy(Item, item_set.items.items, process.items());
+        @memcpy(item_set.items.items, process.items());
         item_set.sort();
     }
 
@@ -157,11 +157,11 @@ pub const Generator = struct {
                     // Re-queue to account for the changed item set.
                     if (changed)
                         try process.requeue(index);
-                    item.action = .{.shift = index};
+                    item.action = .{ .shift = index };
                 } else {
                     // This is a new item set
                     const result = try process.enqueue(succ);
-                    item.action = .{.shift = result.index};
+                    item.action = .{ .shift = result.index };
                 }
             }
         }
@@ -172,7 +172,7 @@ pub const Generator = struct {
     pub fn generate(self: *Generator) !ParseTable {
         const family = try self.buildFamily();
 
-        for (family) |item_set, i| {
+        for (family, 0..) |item_set, i| {
             std.debug.print("i{}:\n", .{i});
             item_set.dump(true, self.g);
         }
@@ -184,8 +184,8 @@ pub const Generator = struct {
         return parse_table;
     }
 
-    pub fn allocator(self: *Generator) *Allocator {
-        return &self.arena.allocator;
+    pub fn allocator(self: *Generator) Allocator {
+        return self.arena.allocator();
     }
 };
 
@@ -205,12 +205,12 @@ pub const ParseTable = struct {
     /// The total number of states in this parse table.
     states: usize,
 
-    fn init(allocator: *Allocator, g: *const Grammar, states: usize) !ParseTable {
+    fn init(allocator: Allocator, g: *const Grammar, states: usize) !ParseTable {
         const actions = try allocator.alloc(Action, Lookahead.totalIndices(g) * states);
         const gotos = try allocator.alloc(?usize, g.nonterminals.len * states);
 
-        std.mem.set(Action, actions, .err);
-        std.mem.set(?usize, gotos, null);
+        @memset(actions, .err);
+        @memset(gotos, null);
 
         return ParseTable{
             .actions = actions,
@@ -227,7 +227,7 @@ pub const ParseTable = struct {
         return Lookahead.totalIndices(g) * state + lookahead.toIndex();
     }
 
-    pub fn deinit(self: *ParseTable, allocator: *Allocator) void {
+    pub fn deinit(self: *ParseTable, allocator: Allocator) void {
         allocator.free(self.actions);
         allocator.free(self.gotos);
         self.* = undefined;
